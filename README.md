@@ -1,32 +1,73 @@
 # 3m — Minecraft Mod Manager
 
-Tải mod từ Modrinth nhanh chóng qua CLI. Không cần đăng nhập, không cần thư viện ngoài — chỉ cần Python 3.
+`3m` (or `mmm`) is a lightweight, dependency-aware CLI tool to manage Minecraft mods from [Modrinth](https://modrinth.com/).
 
-## Cài đặt
+## Features
+- **Local Profiles**: Manages mod profiles independently for each project directory.
+- **Dependency Resolution**: Automatically and recursively installs all required dependencies.
+- **Bulk Installation**: Supports installing mods from command-line arguments or text files (`requirements.txt` style).
+- **Lightweight**: No bloat, no API keys required, no background tracking.
+- **Clean Architecture**: Modular Python package structure.
 
+## Installation
+
+### From Debian Package (.deb)
+The recommended way to install `3m` is via the provided Debian package, which sets up a dedicated virtual environment for the application.
+
+1. Download the latest `.deb` file.
+2. Install using `apt`:
+   ```bash
+   sudo apt install ./3m_0.1.0_all.deb
+   ```
+
+## Usage
+
+### 1. Initialize Profile
+Before installing mods in a directory, set your target Minecraft version and loader (e.g., `fabric`, `forge`, `quilt`, `neoforge`):
 ```bash
-chmod +x 3m.sh 3m.py
-
-# Tùy chọn: thêm vào PATH để gõ '3m' ở bất cứ đâu
-sudo ln -s $(pwd)/3m.sh /usr/local/bin/3m
+mmm set-profile 1.21.1 fabric
 ```
 
-## Cách dùng
+### 2. Install Mods
+- **By Name**:
+  ```bash
+  mmm install sodium, lithium, iris
+  ```
+- **From File** (e.g., `mods.txt` with one mod slug per line):
+  ```bash
+  mmm install -f mods.txt
+  ```
+- **By Search Index**:
+  ```bash
+  mmm search sodium
+  mmm install -i 1
+  ```
 
-```
-3m set-profile 1.21.1 fabric        # Đặt profile MC version + loader
-3m search sodium                    # Tìm mod, kết quả có số thứ tự
-3m get -i 1                         # Tải mod theo index
-3m get sodium                       # Tải ngay kết quả đầu tiên
-3m get sodium, lithium, iris        # Tải nhiều mod cùng lúc
-3m show -i 1                        # Xem chi tiết mod theo index
-3m show sodium                      # Xem chi tiết mod theo tên
-3m profile                          # Xem profile hiện tại
-```
+### 3. Management
+- **List installed mods**:
+  ```bash
+  mmm ls
+  ```
+- **Remove a mod**:
+  ```bash
+  mmm rm sodium
+  ```
+- **Autoremove unused dependencies**:
+  ```bash
+  mmm autoremove
+  ```
 
-## Lưu ý
+## Commands
+| Command | Alias | Description |
+| :--- | :--- | :--- |
+| `set-profile` | - | Set MC version and loader |
+| `search` | - | Search Modrinth for mods |
+| `install` | `get` | Install mod(s) |
+| `show` | - | Show mod details |
+| `ls` | `list` | List installed mods |
+| `rm` | `remove` | Remove mod(s) |
+| `autoremove` | - | Cleanup orphaned dependencies |
+| `profile` | - | View current profile info |
 
-- Mod được tải vào **thư mục hiện tại** khi chạy lệnh `get`.
-- Profile lưu tại `~/.config/3m/profile.json`.
-- Cache kết quả search cuối tại `~/.config/3m/last_search.json`.
-- Loaders hỗ trợ: `fabric`, `forge`, `quilt`, `neoforge`.
+---
+*Built with ❤️ for Minecraft enthusiasts.*

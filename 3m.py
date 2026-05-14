@@ -604,8 +604,29 @@ def print_search_results(results, profile, query=""):
 def cmd_set_profile(args):
     mc     = args.mc_version
     loader = args.loader.lower()
+
+    # ── Validate Loader ───────────────────────────────────────────────────────
     if loader not in KNOWN_LOADERS:
-        warn(f"Unknown loader '{loader}'. Common loaders: {', '.join(KNOWN_LOADERS)}")
+        err(f"Invalid loader '{loader}'")
+        info(f"Supported loaders: {', '.join(f'{GOLD}{l}{RESET}' for l in KNOWN_LOADERS)}")
+        sys.exit(1)
+
+    # ── Validate MC Version ───────────────────────────────────────────────────
+    step(f"Verifying Minecraft version {BWHITE}{mc}{RESET}...")
+    versions = api_get("/tag/game_version")
+    if versions:
+        valid_versions = [v["version"] for v in versions]
+        if mc not in valid_versions:
+            err(f"Minecraft version {BWHITE}{mc}{RESET} is invalid or not supported by Modrinth.")
+            # Suggest close matches
+            matches = []
+            for v in valid_versions:
+                if v.startswith(mc[:4]): # e.g. "1.21"
+                    matches.append(v)
+            if matches:
+                info(f"Did you mean: {', '.join(matches[:5])}?")
+            sys.exit(1)
+
     save_profile(mc, loader)
     header("Profile updated")
     print(f"  {SLATE}Minecraft  {RESET}{BWHITE}{mc}{RESET}")

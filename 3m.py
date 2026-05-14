@@ -24,11 +24,7 @@ VERSION    = "3.0.0"
 API_BASE   = "https://api.modrinth.com/v2"
 USER_AGENT = f"3m-cli/{VERSION} (minecraft-mod-manager)"
 
-CACHE_DIR  = Path.home() / ".config" / "3m"
-CACHE_FILE = CACHE_DIR / "last_search.json"
-
 KNOWN_LOADERS = ("fabric", "forge", "quilt", "neoforge")
-
 # ══════════════════════════════════════════════════════════════════════════════
 #  ANSI colors
 # ══════════════════════════════════════════════════════════════════════════════
@@ -170,15 +166,20 @@ def download_file(url, dest_path, sha512_expected=None):
         return False
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Profile  (~/.config/3m/profile.json)
+#  Profile & Cache (Local to current directory)
 # ══════════════════════════════════════════════════════════════════════════════
 
-PROFILE_FILE = CACHE_DIR / "profile.json"
+def profile_path():
+    return Path.cwd() / "profile.json"
+
+def cache_path():
+    return Path.cwd() / ".3m_cache.json"
 
 def load_profile():
-    if PROFILE_FILE.exists():
+    p = profile_path()
+    if p.exists():
         try:
-            data = json.loads(PROFILE_FILE.read_text())
+            data = json.loads(p.read_text())
             if data.get("mc_version") and data.get("loader"):
                 return data
         except (json.JSONDecodeError, ValueError):
@@ -186,8 +187,7 @@ def load_profile():
     return None
 
 def save_profile(mc_version, loader):
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    PROFILE_FILE.write_text(json.dumps({
+    profile_path().write_text(json.dumps({
         "mc_version": mc_version,
         "loader":     loader,
         "updated_at": _now_iso(),
@@ -196,7 +196,7 @@ def save_profile(mc_version, loader):
 def require_profile():
     p = load_profile()
     if not p:
-        err("No profile set. Run first:")
+        err("No profile set in this directory. Run first:")
         print(f"    {GOLD}3m set-profile 1.21.1 fabric{RESET}\n")
         sys.exit(1)
     return p
@@ -206,18 +206,18 @@ def require_profile():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def save_cache(results, query=""):
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    CACHE_FILE.write_text(json.dumps({
+    cache_path().write_text(json.dumps({
         "query":   query,
         "results": results,
         "time":    time.time(),
     }, indent=2))
 
 def load_cache():
-    if not CACHE_FILE.exists():
+    p = cache_path()
+    if not p.exists():
         return None
     try:
-        data = json.loads(CACHE_FILE.read_text())
+        data = json.loads(p.read_text())
         # Support old list format
         if isinstance(data, list):
             return data
@@ -226,10 +226,11 @@ def load_cache():
         return None
 
 def load_cache_meta():
-    if not CACHE_FILE.exists():
+    p = cache_path()
+    if not p.exists():
         return None
     try:
-        data = json.loads(CACHE_FILE.read_text())
+        data = json.loads(p.read_text())
         if isinstance(data, list):
             return {"query": "?", "results": data, "time": 0}
         return data
@@ -273,7 +274,6 @@ def _empty_mod_entry():
         "downloads":   0,
         "followers":   0,
         "required_by": [],   # list of slugs that depend on this mod
-        "depends_on":  [],   # list of slugs this mod depends on
         "requested":   False,
         "installed_at": _now_iso(),
     }
@@ -305,7 +305,7 @@ def upsert_mod(data, slug, **fields):
     entry["slug"] = slug
 
     for key, value in fields.items():
-        if key in ("required_by", "depends_on"):
+        if key == "required_by":
             # Merge lists without duplicates
             existing = entry.get(key, [])
             for item in (value or []):
@@ -325,10 +325,9 @@ def remove_mod_from_metadata(data, slug):
         return data
     del data["mods"][slug]
     for mod in data["mods"].values():
-        for key in ("required_by", "depends_on"):
-            lst = mod.get(key, [])
-            if slug in lst:
-                lst.remove(slug)
+        lst = mod.get("required_by", [])
+        if slug in lst:
+            lst.remove(slug)
     return data
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -535,8 +534,7 @@ def install_mod(name, profile, dest_dir, metadata, parent_slug=None, seen=None):
     deps = get_required_dependencies(slug, profile)
     for dep_slug, _dep_version_id in deps:
         # Track this dependency relationship even before downloading
-        upsert_mod(metadata, dep_slug, depends_on=[], required_by=[slug])
-        upsert_mod(metadata, slug, depends_on=[dep_slug])
+        upsert_mod(metadata, dep_slug, required_by=[slug])
 
         if dep_slug in seen:
             continue
@@ -833,7 +831,6 @@ def cmd_list(args):
             version  = entry.get("version", "")
             req_tag  = f"{tag_color}{tag_text}{RESET}"
             req_by   = entry.get("required_by", [])
-            dep_on   = entry.get("depends_on", [])
             by_str   = f"  {dim('←')} {ROSE}{', '.join(req_by)}{RESET}" if req_by else ""
 
             print(f"  {idx_col}  {BWHITE}{title}{RESET}  "
@@ -856,10 +853,6 @@ def cmd_list(args):
                     print(f"       {SLATE}{size_str:>8}  {file_name}{RESET}")
                 else:
                     print(f"       {ROSE}file missing: {file_name}{RESET}")
-
-            if dep_on:
-                deps_str = ", ".join(f"{INDIGO}{d}{RESET}" for d in dep_on)
-                print(f"       {dim('depends on')} {deps_str}")
 
             print()
             i += 1
@@ -1084,7 +1077,7 @@ def print_help():
         f"Only {LIME}required{RESET} dependencies are auto-installed. Optional deps are skipped.",
         f"Commas separate mods; spaces are part of the name: {GOLD}get immediately fast, sodium{RESET}",
         f"Checksums (SHA-512) are verified after every download.",
-        f"Profile stored at {dim(str(PROFILE_FILE))}",
+        f"Profile stored at {dim('./' + profile_path().name + '  (per mod directory)')}",
         f"Metadata stored at {dim('./' + metadata_path().name + '  (per mod directory)')}",
         f"No login or API key needed. Rate limit: 300 req/min.",
     ]

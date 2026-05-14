@@ -11,16 +11,18 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import argparse
-import re
 import time
 from pathlib import Path
+from difflib import SequenceMatcher
 from datetime import datetime
 
 VERSION     = "2.0.0"
 API_BASE    = "https://api.modrinth.com/v2"
 USER_AGENT  = f"3m-cli/{VERSION} (minecraft-mod-manager)"
-CONFIG_FILE = Path.home() / ".config" / "3m" / "profile.json"
 CACHE_FILE  = Path.home() / ".config" / "3m" / "last_search.json"
+
+def get_local_profile_path():
+    return Path.cwd() / ".profile"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ANSI
@@ -161,21 +163,27 @@ def download_file(url, dest_path):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_profile():
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
-            return json.load(f)
+    p = get_local_profile_path()
+    if p.exists():
+        try:
+            with open(p) as f:
+                data = json.load(f)
+                if data:
+                    return data
+        except (json.JSONDecodeError, ValueError):
+            pass
     return None
 
 def save_profile(mc_version, loader):
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
+    p = get_local_profile_path()
+    with open(p, "w") as f:
         json.dump({"mc_version": mc_version, "loader": loader}, f)
 
 def require_profile():
     p = load_profile()
     if not p:
         _print_err("Chưa có profile. Cần đặt trước:")
-        print(f"    {GOLD}3m set-profile 1.21.1 fabric{RESET}\n")
+        print(f"    {GOLD}VD: 3m set-profile 1.21.1 fabric{RESET}\n")
         sys.exit(1)
     return p
 
@@ -217,6 +225,9 @@ def loader_badge(loader):
     c = LOADER_COLORS.get(loader.lower(), CYAN)
     return f"{c}[{loader}]{RESET}"
 
+def normalize_slug(name):
+    return name.lower().replace(" ", "-")
+
 def search_mods(query, profile, limit=10):
     facets = json.dumps([
         [f"versions:{profile['mc_version']}"],
@@ -232,10 +243,27 @@ def search_mods(query, profile, limit=10):
         return []
     return data.get("hits", [])
 
+def get_slug_from_name(name, profile, limit=5):
+    hits = search_mods(name, profile, limit=limit)
+    for hit in hits:
+        slug = hit.get("slug", "")
+        if slug.lower() == normalize_slug(name) or hit.get("title", "").lower() == name.lower():
+            return slug
+    return hits[0]["slug"] if hits else None
+
 def fmt_num(n):
     if n >= 1_000_000: return f"{n/1_000_000:.1f}M"
     if n >= 1_000:     return f"{n/1_000:.1f}K"
     return str(n)
+
+def fuzzy_match(name, choices, threshold=0.6):
+    best, best_score = None, 0
+    for c in choices:
+        score = SequenceMatcher(None, name.lower(), c.lower()).ratio()
+        if score > best_score and score >= threshold:
+            best_score = score
+            best = c
+    return best
 
 def print_results(results, profile, query=""):
     if not results:
@@ -298,32 +326,76 @@ def get_primary_file(version):
             return f
     return files[0] if files else None
 
+def get_project_info(slug_or_id):
+    return api_get(f"/project/{slug_or_id}")
+
+def get_dependencies(slug, profile):
+    version = get_best_version(slug, profile)
+    if not version:
+        return []
+    deps = version.get("dependencies", [])
+    result = []
+    for dep in deps:
+        dep_type = dep.get("dependency_type")
+        if dep_type in ("required", "optional"):
+            project_id = dep.get("project_id")
+            if project_id:
+                proj = get_project_info(project_id)
+                if proj:
+                    result.append(proj.get("slug", project_id))
+    return result
+
+def resolve_deps_ordered(requests, profile, dest_dir):
+    result = []
+    seen = set()
+    dep_of = {}
+
+    for name in requests:
+        req_slug = get_slug_from_name(name, profile)
+        if req_slug and req_slug not in seen:
+            result.append((name, "req"))
+            seen.add(req_slug)
+
+        if req_slug:
+            deps = get_dependencies(req_slug, profile)
+            for dep_slug in deps:
+                if dep_slug not in seen:
+                    dep_file = next((d for d in dest_dir.glob(f"{dep_slug}*.jar")), None)
+                    if not dep_file:
+                        result.append((dep_slug, "dep", name))
+                        seen.add(dep_slug)
+                        dep_of[dep_slug] = name
+                    else:
+                        seen.add(dep_slug)
+
+    return result, dep_of
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Download
 # ══════════════════════════════════════════════════════════════════════════════
 
-def do_download(query, profile, dest_dir):
-    _print_step(f"{BWHITE}{query}{RESET}")
+def do_download(name, profile, dest_dir):
+    _print_step(f"{BWHITE}{name}{RESET}")
 
-    hits = search_mods(query, profile, limit=1)
-    if not hits:
-        _print_err(f"Không tìm thấy mod khớp với '{query}'")
-        return False
+    slug = get_slug_from_name(name, profile)
+    if not slug:
+        _print_err(f"Không tìm thấy mod khớp với '{name}'")
+        return None
 
-    slug  = hits[0]["slug"]
-    title = hits[0]["title"]
-    if slug.lower() != query.lower().replace(" ", "-"):
+    hits = search_mods(name, profile, limit=1)
+    title = hits[0]["title"] if hits else name
+    if slug.lower() != normalize_slug(name):
         print(f"       {TEAL}↳ {title}{RESET}  {dim(slug)}")
 
     version = get_best_version(slug, profile)
     if not version:
         _print_err(f"Không có phiên bản {profile['mc_version']}/{profile['loader']} cho {title}")
-        return False
+        return None
 
     file_info = get_primary_file(version)
     if not file_info:
         _print_err(f"Không tìm thấy file tải về cho {title}")
-        return False
+        return None
 
     url      = file_info["url"]
     filename = file_info["filename"]
@@ -338,12 +410,13 @@ def do_download(query, profile, dest_dir):
 
     if dest.exists():
         _print_skip(f"Đã tồn tại, bỏ qua — {filename}")
-        return True
+        return slug
 
     success = download_file(url, dest)
     if success:
         _print_ok(f"{title}  {dim(filename)}")
-    return success
+        return slug
+    return None
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Commands
@@ -374,25 +447,55 @@ def cmd_search(args):
 def cmd_get(args):
     profile  = require_profile()
     dest_dir = Path(os.getcwd())
+    auto_deps = not args.no_deps if hasattr(args, "no_deps") else True
 
     if args.names:
         raw   = " ".join(args.names)
         mods  = [s.strip() for s in raw.split(",") if s.strip()]
-        total = len(mods)
+
+        if auto_deps:
+            _print_info(f"Đang phân tích phụ thuộc...")
+            all_items, dep_of = resolve_deps_ordered(mods, profile, dest_dir)
+        else:
+            print(f"  {dim('Bỏ qua phụ thuộc')}")
+            all_items = [(m, "req") for m in mods]
+            dep_of = {}
+            total = len(all_items)
+
+        total = len(all_items)
 
         _header(
             f"Cài đặt {total} mod",
             f"→ {dest_dir}"
         )
 
+        installed_map = []
+        dep_list = []
         ok_count  = 0
         fail_list = []
-        for idx, name in enumerate(mods, 1):
-            print(f"  {SLATE}[{idx}/{total}]{RESET}  ", end="")
-            if do_download(name, profile, dest_dir):
-                ok_count += 1
+
+        req_count = sum(1 for item in all_items if item[1] == "req")
+        idx = 1
+        for item in all_items:
+            if len(item) == 3:
+                name, item_type, parent = item
+                tag = f"{PURPLE}[Dep → {parent}]{RESET}"
             else:
-                fail_list.append(name)
+                name, item_type = item
+                tag = f"{SLATE}[{idx}/{req_count}]{RESET}"
+            print(f"  {tag}  ", end="")
+            result_slug = do_download(name, profile, dest_dir)
+            if result_slug:
+                ok_count += 1
+                if item_type == "req":
+                    installed_map.append((name, result_slug))
+                else:
+                    dep_list.append(result_slug)
+            else:
+                if item_type == "req":
+                    fail_list.append(name)
+            if item_type == "req":
+                idx += 1
             print()
 
         _divider(color=MINT)
@@ -401,6 +504,30 @@ def cmd_get(args):
             print(f"    {ROSE}✗ {len(fail_list)} thất bại:{RESET} "
                   f"{', '.join(fail_list)}", end="")
         print(f"\n  {dim('Thư mục: ' + str(dest_dir))}\n")
+
+        if len(mods) > 1:
+            _print_warn("Hãy kiểm tra lại các mod được yêu cầu có được cài đặt chính xác chưa, đôi khi có những mod có tên gần giống nhau")
+            print()
+            print(f"  {BYELLOW}Kết quả cài đặt:{RESET}")
+
+            max_len = max(len(m) for m in mods) if mods else 0
+            idx = 1
+            for req in mods:
+                found = next((s for n, s in installed_map if n == req), None)
+                if found:
+                    print(f"    [{idx}] {req:<{max_len}} → {LIME}{found}{RESET}")
+                else:
+                    print(f"    [{idx}] {req:<{max_len}} → {ROSE}(không cài được){RESET}")
+                idx += 1
+
+            if dep_list:
+                print()
+                print(f"  {PURPLE}Phụ thuộc:{RESET}")
+                for d in dep_list:
+                    print(f"    {dim('·')} {d}")
+            print()
+            print(f"  {dim('Gỡ mod bằng: 3m remove <tên> hoặc 3m list → 3m remove -i <index>')}")
+            print()
         return
 
     if args.i is not None:
@@ -507,7 +634,7 @@ def cmd_profile(args):
         print()
     else:
         _print_warn("Chưa có profile.")
-        print(f"    {GOLD}3m set-profile 1.21.1 fabric{RESET}\n")
+        print(f"    {GOLD}VD cách set: 3m set-profile 1.21.1 fabric{RESET}\n")
 
 def cmd_list(args):
     dest_dir = Path(os.getcwd())
@@ -518,14 +645,88 @@ def cmd_list(args):
         print()
         return
     total_size = 0
-    for j in jars:
+    for i, j in enumerate(jars, 1):
         size_kb = j.stat().st_size // 1024
         total_size += j.stat().st_size
         mtime = datetime.fromtimestamp(j.stat().st_mtime).strftime("%d/%m/%y %H:%M")
-        print(f"  {MINT}▪{RESET} {BWHITE}{j.name}{RESET}")
-        print(f"      {SLATE}{size_kb:>6,} KB    {mtime}{RESET}")
+        idx_col = f"{bg256(236)}{BYELLOW} {i:2d} {RESET}"
+        print(f"  {idx_col}  {BWHITE}{j.name}{RESET}")
+        print(f"       {SLATE}{size_kb:>6,} KB    {mtime}{RESET}")
     _divider(color=SLATE)
     print(f"  {dim(str(len(jars)) + ' file  ·  tổng ' + str(total_size//1024) + ' KB')}\n")
+    print(f"  {dim('Dùng index với: 3m remove -i <index>')}\n")
+
+def cmd_remove(args):
+    dest_dir = Path(os.getcwd())
+    jars = list(sorted(dest_dir.glob("*.jar")))
+    if not jars:
+        _print_err("Không có mod nào trong thư mục để gỡ.")
+        if args.i is not None:
+            print(f"  {dim('Bạn đang dùng index trỏ vào danh sách search, không thể thực hiện lệnh xóa.')}")
+            print(f"  {dim('Lệnh xóa dành cho danh sách file .jar trên máy (xem bằng 3m list)')}")
+        print()
+        sys.exit(1)
+
+    if args.all:
+        if not args.confirm:
+            count = len(jars)
+            print(f"  {ROSE}Cảnh báo: Bạn sắp xóa {count} mod!{RESET}")
+            print(f"  {dim('Gõ')} {CYAN}3m remove -a --confirm{RESET} {dim('để xác nhận')}")
+            print()
+            sys.exit(1)
+        for j in jars:
+            j.unlink()
+        _print_ok(f"Đã gỡ {len(jars)} mod")
+        print()
+        return
+
+    if args.i is not None:
+        idx = args.i - 1
+        if idx < 0 or idx >= len(jars):
+            _print_err(f"Index {args.i} nằm ngoài (1–{len(jars)})")
+            sys.exit(1)
+        j = jars[idx]
+        print(f"  {YELLOW}Xóa: {j.name}?{RESET}  {dim('[y/N]')}")
+        confirm = input("  > ").strip().lower()
+        if confirm != "y":
+            print(f"  {dim('Đã hủy')}")
+            print()
+            return
+        j.unlink()
+        _print_ok(f"Đã gỡ: {j.name}")
+        print()
+        return
+
+    if args.names:
+        raw = " ".join(args.names)
+        removed = []
+        for name in raw.split(","):
+            name = name.strip()
+            if not name:
+                continue
+            matched = fuzzy_match(name, [j.stem for j in jars])
+            if matched:
+                print(f"  {YELLOW}Xóa: {matched}?{RESET}  {dim('[y/N]')}")
+                confirm = input("  > ").strip().lower()
+                if confirm != "y":
+                    print(f"  {dim('Đã hủy')}")
+                    continue
+                for j in jars:
+                    if j.stem == matched:
+                        j.unlink()
+                        removed.append(matched)
+                        break
+            else:
+                _print_warn(f"Không tìm thấy mod gần với '{name}'")
+        if removed:
+            print()
+            for m in removed:
+                _print_ok(f"Đã gỡ: {m}")
+        print()
+        return
+
+    _print_err("Dùng: remove <tên> hoặc remove -i <index>")
+    sys.exit(1)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Help
@@ -552,11 +753,12 @@ def print_help():
              [f"{GOLD}3m search sodium{RESET}",
               f"{GOLD}3m search \"performance optimization\" -n 15{RESET}"]),
 
-            (f"{BYELLOW}get{RESET} {CYAN}<tên>{RESET}  {SLATE}|{RESET}  {BYELLOW}get{RESET} {CYAN}-i <index>{RESET}",
-             f"Tải mod về thư mục {ITALIC}hiện tại{RESET}. Dùng dấu phẩy để tải nhiều cùng lúc.",
-             [f"{GOLD}3m get sodium{RESET}",
-              f"{GOLD}3m get -i 3{RESET}",
-              f"{GOLD}3m get sodium, lithium, iris, immediately fast{RESET}"]),
+(f"{BYELLOW}get{RESET} {CYAN}<tên>{RESET}  {SLATE}|{RESET}  {BYELLOW}get{RESET} {CYAN}-i <index>{RESET}",
+              f"Tải mod về thư mục {ITALIC}hiện tại{RESET}. Tự động cài phụ thuộc. Dùng --no-deps để bỏ qua.",
+              [f"{GOLD}3m get sodium{RESET}",
+               f"{GOLD}3m get -i 3{RESET}",
+               f"{GOLD}3m get --no-deps sodium, lithium{RESET}",
+               f"{GOLD}3m get sodium, lithium, iris, immediately fast{RESET}"]),
 
             (f"{BYELLOW}show{RESET} {CYAN}<tên>{RESET}  {SLATE}|{RESET}  {BYELLOW}show{RESET} {CYAN}-i <index>{RESET}",
              "Xem thông tin chi tiết: downloads, versions, file size...",
@@ -566,6 +768,13 @@ def print_help():
             (f"{BYELLOW}list{RESET}",
              "Liệt kê tất cả .jar trong thư mục hiện tại.",
              [f"{GOLD}3m list{RESET}"]),
+
+            (f"{BYELLOW}remove{RESET} {CYAN}<tên>{RESET}  {SLATE}|{RESET}  {BYELLOW}remove{RESET} {CYAN}-i <index>{RESET}  {SLATE}|{RESET}  {BYELLOW}remove -a{RESET}",
+             "Gỡ mod. Dùng -a để xóa toàn bộ. Fuzzy match khi gỡ theo tên.",
+             [f"{GOLD}3m remove sodium{RESET}",
+              f"{GOLD}3m remove -i 1{RESET}",
+              f"{GOLD}3m remove -a{RESET}",
+              f"{GOLD}3m remove sodium, lithium{RESET}"]),
 
             (f"{BYELLOW}profile{RESET}",
              "Xem profile và thông tin cache hiện tại.",
@@ -593,7 +802,7 @@ def print_help():
         f"Mod luôn tải vào {ITALIC}thư mục hiện tại{RESET} khi chạy {CYAN}get{RESET}.",
         f"{CYAN}get <tên>{RESET} tự search rồi lấy hit đầu tiên. Để chắc hơn, dùng {CYAN}search{RESET} → {CYAN}get -i{RESET}.",
         f"Dấu phẩy tách mod, space là phần của tên: {GOLD}get immediately fast, sodium{RESET}",
-        f"Profile lưu tại {dim('~/.config/3m/profile.json')} · Cache tại {dim('~/.config/3m/last_search.json')}",
+        f"Profile lưu tại {dim('.profile trong thư mục hiện tại')} · Cache tại {dim('~/.config/3m/last_search.json')}",
         f"Không cần đăng nhập hay API key. Rate limit: 300 req/phút.",
     ]
     for note in notes:
@@ -646,10 +855,17 @@ def main():
 
     sp = sub.add_parser("get", add_help=False)
     sp.add_argument("-i", type=int, metavar="INDEX")
+    sp.add_argument("--no-deps", action="store_true")
     sp.add_argument("names", nargs="*")
 
     sp = sub.add_parser("show", add_help=False)
     sp.add_argument("-i", type=int, metavar="INDEX")
+    sp.add_argument("names", nargs="*")
+
+    sp = sub.add_parser("remove", add_help=False)
+    sp.add_argument("-i", type=int, metavar="INDEX")
+    sp.add_argument("-a", "--all", action="store_true")
+    sp.add_argument("--confirm", action="store_true")
     sp.add_argument("names", nargs="*")
 
     sub.add_parser("list",    add_help=False)
@@ -670,6 +886,7 @@ def main():
         "search":      cmd_search,
         "get":         cmd_get,
         "show":        cmd_show,
+        "remove":      cmd_remove,
         "list":        cmd_list,
         "profile":     cmd_profile,
     }

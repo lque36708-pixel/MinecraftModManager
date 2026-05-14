@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+.venv/
+
+# Local configuration
+profile.json
+metadata.json
+.3m_cache.json
+*.deb
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

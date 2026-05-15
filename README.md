@@ -13,7 +13,7 @@
 
 ```bash
 git clone https://github.com/lque36708-pixel/MinecraftModManager.git
-cd mmm
+cd MinecraftModManager
 ./install.sh
 ```
 

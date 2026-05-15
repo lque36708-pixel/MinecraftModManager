@@ -20,4 +20,7 @@ alias mmm="python3 $SCRIPT_DIR/3m.py"
 $MARKER
 EOF
 
-echo "  ✔ Done. Restart your shell or run: source $BASHRC"
+echo "  ✔ Done. Sourcing $BASHRC ..."
+# shellcheck disable=SC1090
+source "$BASHRC" 2>/dev/null || true
+echo "  ✔ Aliases active in this shell. Run: 3m --version"

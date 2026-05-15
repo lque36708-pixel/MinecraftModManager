@@ -558,6 +558,22 @@ def get_dependents_recursive(slug, mods, seen=None):
             result.extend(get_dependents_recursive(dep, mods, seen))
     return result
 
+
+def is_orphaned(slug, mods, seen=None):
+    """Check if a dep mod is orphaned (no requested mod requires it transitively)."""
+    entry = mods.get(slug, {})
+    if entry.get("requested"):
+        return False
+    if seen is None:
+        seen = set()
+    seen.add(slug)
+    for parent in entry.get("required_by", []):
+        if parent in seen:
+            continue
+        if not is_orphaned(parent, mods, seen):
+            return False
+    return True
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Display helpers
 # ══════════════════════════════════════════════════════════════════════════════
@@ -675,62 +691,72 @@ def cmd_get(args):
         print()
         return
 
-    # ── By name(s) ────────────────────────────────────────────────────────────
-    if args.names:
+    # ── By name(s) or from file ───────────────────────────────────────────────
+    mods = None
+    file_label = None
+    if getattr(args, "f", None):
+        fpath = Path(args.f)
+        if not fpath.exists():
+            err(f"File not found: {args.f}")
+            sys.exit(1)
+        raw   = fpath.read_text()
+        mods  = [s.strip() for s in raw.replace(",", "\n").split("\n") if s.strip()]
+        file_label = fpath.name
+    elif args.names:
         raw  = " ".join(args.names)
         mods = [s.strip() for s in raw.split(",") if s.strip()]
 
-        if not auto_deps:
-            print(f"  {dim('Skipping dependencies (--no-deps)')}\n")
+    if mods is None:
+        err("Usage: get <name>  or  get -i <index>  or  get -f <file>")
+        sys.exit(1)
 
+    if not auto_deps:
+        print(f"  {dim('Skipping dependencies (--no-deps)')}\n")
+
+    if file_label:
+        header("Installing mods from file", file_label)
+    else:
         header(f"Installing {len(mods)} mod{'s' if len(mods) != 1 else ''}",
                str(dest_dir))
 
-        seen        = set()
-        ok_count    = 0
-        fail_list   = []
-        install_map = []
+    seen        = set()
+    ok_count    = 0
+    fail_list   = []
+    install_map = []
 
-        for idx, name in enumerate(mods, 1):
-            print(f"  {SLATE}[{idx}/{len(mods)}]{RESET}  ", end="")
-            if auto_deps:
-                slug = install_mod(name, profile, dest_dir, metadata, seen=seen)
+    for idx, name in enumerate(mods, 1):
+        print(f"  {SLATE}[{idx}/{len(mods)}]{RESET}  ", end="")
+        if auto_deps:
+            slug = install_mod(name, profile, dest_dir, metadata, seen=seen)
+        else:
+            slug = install_mod(name, profile, dest_dir, metadata,
+                               seen=seen | set(metadata.get("mods", {}).keys()))
+
+        if slug:
+            ok_count += 1
+            install_map.append((name, slug))
+        else:
+            fail_list.append(name)
+        print()
+
+    save_metadata(metadata)
+
+    divider(c=MINT)
+    print(f"  {LIME}✔ {ok_count} succeeded{RESET}", end="")
+    if fail_list:
+        print(f"    {ROSE}✗ {len(fail_list)} failed:{RESET} {', '.join(fail_list)}", end="")
+    print(f"\n  {dim('Directory: ' + str(dest_dir))}\n")
+
+    if len(mods) > 1:
+        print(f"  {BYELLOW}Installation map:{RESET}")
+        max_len = max(len(m) for m in mods)
+        for i, req in enumerate(mods, 1):
+            found = next((s for n, s in install_map if n == req), None)
+            if found:
+                print(f"    {dim(str(i) + '.')}  {req:<{max_len}}  →  {LIME}{found}{RESET}")
             else:
-                # No deps: use a fresh seen set per mod so they don't block each other,
-                # but pass parent=None to mark them all as requested
-                slug = install_mod(name, profile, dest_dir, metadata,
-                                   seen=seen | set(metadata.get("mods", {}).keys()))
-
-            if slug:
-                ok_count += 1
-                install_map.append((name, slug))
-            else:
-                fail_list.append(name)
-            print()
-
-        save_metadata(metadata)
-
-        # ── Summary ───────────────────────────────────────────────────────────
-        divider(c=MINT)
-        print(f"  {LIME}✔ {ok_count} succeeded{RESET}", end="")
-        if fail_list:
-            print(f"    {ROSE}✗ {len(fail_list)} failed:{RESET} {', '.join(fail_list)}", end="")
-        print(f"\n  {dim('Directory: ' + str(dest_dir))}\n")
-
-        if len(mods) > 1:
-            print(f"  {BYELLOW}Installation map:{RESET}")
-            max_len = max(len(m) for m in mods)
-            for i, req in enumerate(mods, 1):
-                found = next((s for n, s in install_map if n == req), None)
-                if found:
-                    print(f"    {dim(str(i) + '.')}  {req:<{max_len}}  →  {LIME}{found}{RESET}")
-                else:
-                    print(f"    {dim(str(i) + '.')}  {req:<{max_len}}  →  {ROSE}(failed){RESET}")
-            print()
-        return
-
-    err("Missing argument. Usage: get <name>  or  get -i <index>")
-    sys.exit(1)
+                print(f"    {dim(str(i) + '.')}  {req:<{max_len}}  →  {ROSE}(failed){RESET}")
+        print()
 
 
 def cmd_show(args):
@@ -1020,6 +1046,44 @@ def cmd_profile(args):
         print(f"  {dim('Example: 3m set-profile 1.21.1 fabric')}\n")
 
 
+def cmd_autoremove(args):
+    dest_dir = Path.cwd()
+    metadata = load_metadata()
+    mods = metadata.get("mods", {})
+
+    if not mods:
+        warn("No mods in metadata.")
+        print()
+        return
+
+    orphaned = [s for s in mods if is_orphaned(s, mods)]
+
+    if not orphaned:
+        ok("No orphaned dependencies found.")
+        print()
+        return
+
+    header(f"Removing {len(orphaned)} orphaned dep{'s' if len(orphaned) != 1 else ''}")
+
+    removed = 0
+    for slug in orphaned:
+        entry = mods.get(slug, {})
+        title = entry.get("title", slug)
+        fpath = dest_dir / entry["file"] if entry.get("file") else None
+
+        remove_mod_from_metadata(metadata, slug)
+
+        if fpath and fpath.exists():
+            fpath.unlink()
+            ok(f"{title}  {dim(fpath.name)}")
+        else:
+            ok(f"{title}  {dim('(no file)')}")
+        removed += 1
+
+    save_metadata(metadata)
+    print(f"  {dim(f'{removed} orphaned dep(s) removed.')}\n")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Help
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1051,10 +1115,11 @@ def print_help():
              f"{GOLD}3m search \"performance optimization\" -n 15{RESET}"]
         ),
         (
-            f"{BYELLOW}get{RESET} {CYAN}<name>{RESET}  {SLATE}|{RESET}  {BYELLOW}get{RESET} {CYAN}-i <index>{RESET}",
+            f"{BYELLOW}get{RESET} {CYAN}<name>{RESET}  {SLATE}|{RESET}  {BYELLOW}get{RESET} {CYAN}-i <index>{RESET}  {SLATE}|{RESET}  {BYELLOW}get{RESET} {CYAN}-f <file>{RESET}",
             "Install mod(s) to current directory. Resolves required deps automatically.",
             [f"{GOLD}3m get sodium{RESET}",
              f"{GOLD}3m get -i 3{RESET}",
+             f"{GOLD}3m get -f mods.txt{RESET}",
              f"{GOLD}3m get --no-deps sodium{RESET}",
              f"{GOLD}3m get sodium, lithium, iris, immediately fast{RESET}"]
         ),
@@ -1082,6 +1147,11 @@ def print_help():
             "View current profile and cache info.",
             [f"{GOLD}3m profile{RESET}"]
         ),
+        (
+            f"{BYELLOW}autoremove{RESET}",
+            "Remove orphaned dependencies no longer required by any mod.",
+            [f"{GOLD}3m autoremove{RESET}"]
+        ),
     ]
 
     for sig, desc, examples in commands:
@@ -1097,6 +1167,7 @@ def print_help():
         f"Mods always install to the {ITALIC}current directory{RESET} when running {CYAN}get{RESET}.",
         f"Only {LIME}required{RESET} dependencies are auto-installed. Optional deps are skipped.",
         f"Commas separate mods; spaces are part of the name: {GOLD}get immediately fast, sodium{RESET}",
+        f"Install from file ({GOLD}-f FILE{RESET}): one mod per line, or comma-separated.",
         f"Checksums (SHA-512) are verified after every download.",
         f"Profile stored at {dim('./' + profile_path().name + '  (per mod directory)')}",
         f"Metadata stored at {dim('./' + metadata_path().name + '  (per mod directory)')}",
@@ -1153,6 +1224,7 @@ def main():
 
     sp = sub.add_parser("get", add_help=False)
     sp.add_argument("-i", type=int, metavar="INDEX")
+    sp.add_argument("-f", metavar="FILE", help="Read mod list from file")
     sp.add_argument("--no-deps", action="store_true")
     sp.add_argument("names", nargs="*")
 
@@ -1165,8 +1237,9 @@ def main():
     sp.add_argument("-a", "--all", action="store_true")
     sp.add_argument("names", nargs="*")
 
-    sub.add_parser("list",    add_help=False)
-    sub.add_parser("profile", add_help=False)
+    sub.add_parser("list",       add_help=False)
+    sub.add_parser("profile",    add_help=False)
+    sub.add_parser("autoremove", add_help=False)
 
     args = parser.parse_args()
 
@@ -1186,6 +1259,7 @@ def main():
         "remove":      cmd_remove,
         "list":        cmd_list,
         "profile":     cmd_profile,
+        "autoremove":  cmd_autoremove,
     }
 
     fn = dispatch.get(args.cmd)

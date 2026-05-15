@@ -12,7 +12,7 @@
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/mmm.git
+git clone https://github.com/lque36708-pixel/MinecraftModManager.git
 cd mmm
 ./install.sh
 ```

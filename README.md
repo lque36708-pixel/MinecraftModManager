@@ -5,56 +5,67 @@
 ## Features
 - **Local Profiles**: Manages mod profiles independently for each project directory.
 - **Dependency Resolution**: Automatically and recursively installs all required dependencies.
-- **Bulk Installation**: Supports installing mods from command-line arguments or text files (`requirements.txt` style).
-- **Lightweight**: No bloat, no API keys required, no background tracking.
-- **Clean Architecture**: Modular Python package structure.
+- **Bulk Installation**: Supports installing mods from command-line arguments or text files.
+- **Lightweight**: Single Python file, no bloat, no API keys required, no background tracking.
 
 ## Installation
 
-### From Debian Package (.deb)
-The recommended way to install `3m` is via the provided Debian package, which sets up a dedicated virtual environment for the application.
+```bash
+git clone https://github.com/yourusername/3m.git
+cd 3m
+./install.sh
+```
 
-1. Download the latest `.deb` file.
-2. Install using `apt`:
-   ```bash
-   sudo apt install ./3m_0.1.0_all.deb
-   ```
+Then restart your terminal or run `source ~/.bashrc`.
+
+### Uninstall
+
+```bash
+cd 3m
+./uninstall.sh
+```
 
 ## Usage
 
 ### 1. Initialize Profile
-Before installing mods in a directory, set your target Minecraft version and loader (e.g., `fabric`, `forge`, `quilt`, `neoforge`):
+Before installing mods in a directory, set your target Minecraft version and loader:
+
 ```bash
-mmm set-profile 1.21.1 fabric
+3m set-profile 1.21.1 fabric
 ```
 
 ### 2. Install Mods
 - **By Name**:
   ```bash
-  mmm install sodium, lithium, iris
+  3m install sodium, lithium, iris
   ```
-- **From File** (e.g., `mods.txt` with one mod slug per line):
+- **From File** (one mod slug per line):
   ```bash
-  mmm install -f mods.txt
+  3m install -f mods.txt
   ```
 - **By Search Index**:
   ```bash
-  mmm search sodium
-  mmm install -i 1
+  3m search sodium
+  3m show -i 1
+  3m install -i 1
   ```
 
 ### 3. Management
 - **List installed mods**:
   ```bash
-  mmm ls
+  3m ls
+  ```
+- **Show mod details**:
+  ```bash
+  3m show sodium
   ```
 - **Remove a mod**:
   ```bash
-  mmm rm sodium
+  3m rm sodium
   ```
 - **Autoremove unused dependencies**:
   ```bash
-  mmm autoremove
+  3m autoremove
   ```
 
 ## Commands
@@ -62,12 +73,13 @@ mmm set-profile 1.21.1 fabric
 | :--- | :--- | :--- |
 | `set-profile` | - | Set MC version and loader |
 | `search` | - | Search Modrinth for mods |
-| `install` | `get` | Install mod(s) |
+| `get` | `install` | Install mod(s) |
 | `show` | - | Show mod details |
-| `ls` | `list` | List installed mods |
-| `rm` | `remove` | Remove mod(s) |
+| `list` | `ls` | List installed mods |
+| `remove` | `rm` | Remove mod(s) |
 | `autoremove` | - | Cleanup orphaned dependencies |
 | `profile` | - | View current profile info |
 
----
-*Built with ❤️ for Minecraft enthusiasts.*
+## Requirements
+- Python 3.8+
+- [rich](https://github.com/Textualize/rich) (installed automatically via `pip install rich`)

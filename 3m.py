@@ -12,9 +12,13 @@ import urllib.error
 import argparse
 import time
 import hashlib
+import io
 from pathlib import Path
 from difflib import SequenceMatcher
 from datetime import datetime, timezone
+
+from rich.markdown import Markdown as RichMarkdown
+from rich.console import Console as RichConsole
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Constants
@@ -578,6 +582,24 @@ def is_orphaned(slug, mods, seen=None):
 #  Display helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
+def render_markdown(text, width=None):
+    """Render markdown to ANSI-colored string via rich."""
+    if not text or not text.strip():
+        return ""
+    if width is None:
+        try:
+            width = int(__import__("shutil").get_terminal_size().columns) - 2
+        except Exception:
+            width = 78
+    width = max(40, min(width, 120))
+
+    buf = io.StringIO()
+    console = RichConsole(file=buf, width=width, force_terminal=True,
+                          color_system="truecolor")
+    console.print(RichMarkdown(text))
+    return buf.getvalue().rstrip("\n")
+
+
 def print_search_results(results, profile, query=""):
     if not results:
         warn("No results found.")
@@ -769,15 +791,27 @@ def cmd_show(args):
             err(f"Mod not found: {raw}")
             sys.exit(1)
     elif args.i is not None:
-        cache = load_cache()
-        if not cache:
-            err("No search results cached. Run: 3m search <name>")
-            sys.exit(1)
-        idx = args.i - 1
-        if idx < 0 or idx >= len(cache):
-            err(f"Index {args.i} out of range (1–{len(cache)})")
-            sys.exit(1)
-        slug = cache[idx]["slug"]
+        metadata = load_metadata()
+        mods = metadata.get("mods", {})
+        if mods:
+            req_list = [(s, m) for s, m in mods.items() if m.get("requested")]
+            dep_list = [(s, m) for s, m in mods.items() if not m.get("requested")]
+            ordered  = req_list + dep_list
+            idx = args.i - 1
+            if idx < 0 or idx >= len(ordered):
+                err(f"Index {args.i} out of range (1–{len(ordered)})")
+                sys.exit(1)
+            slug = ordered[idx][0]
+        else:
+            cache = load_cache()
+            if not cache:
+                err("No search results cached. Run: 3m search <name>")
+                sys.exit(1)
+            idx = args.i - 1
+            if idx < 0 or idx >= len(cache):
+                err(f"Index {args.i} out of range (1–{len(cache)})")
+                sys.exit(1)
+            slug = cache[idx]["slug"]
     else:
         err("Usage: show <name>  or  show -i <index>")
         sys.exit(1)
@@ -831,6 +865,15 @@ def cmd_show(args):
                 print(f"    {INDIGO}·{RESET}  {BWHITE}{dep_title}{RESET}  {dim(dep_slug)}")
     else:
         warn("No version matching current profile.")
+
+    body = project.get("body", "")
+    if body:
+        section("Description")
+        print()
+        rendered = render_markdown(body)
+        for line in rendered.split("\n"):
+            print(f"  {line}")
+        print()
 
     section("Supported Minecraft versions")
     all_vers = sorted(project.get("game_versions", []), reverse=True)
@@ -1222,7 +1265,7 @@ def main():
     sp.add_argument("query", nargs="+")
     sp.add_argument("-n", "--limit", type=int, default=10)
 
-    sp = sub.add_parser("get", add_help=False)
+    sp = sub.add_parser("get", add_help=False, aliases=["install"])
     sp.add_argument("-i", type=int, metavar="INDEX")
     sp.add_argument("-f", metavar="FILE", help="Read mod list from file")
     sp.add_argument("--no-deps", action="store_true")
@@ -1232,12 +1275,12 @@ def main():
     sp.add_argument("-i", type=int, metavar="INDEX")
     sp.add_argument("names", nargs="*")
 
-    sp = sub.add_parser("remove", add_help=False)
+    sp = sub.add_parser("remove", add_help=False, aliases=["rm"])
     sp.add_argument("-i", type=int, metavar="INDEX")
     sp.add_argument("-a", "--all", action="store_true")
     sp.add_argument("names", nargs="*")
 
-    sub.add_parser("list",       add_help=False)
+    sub.add_parser("list",       add_help=False, aliases=["ls"])
     sub.add_parser("profile",    add_help=False)
     sub.add_parser("autoremove", add_help=False)
 
@@ -1255,9 +1298,12 @@ def main():
         "set-profile": cmd_set_profile,
         "search":      cmd_search,
         "get":         cmd_get,
+        "install":     cmd_get,
         "show":        cmd_show,
         "remove":      cmd_remove,
+        "rm":          cmd_remove,
         "list":        cmd_list,
+        "ls":          cmd_list,
         "profile":     cmd_profile,
         "autoremove":  cmd_autoremove,
     }

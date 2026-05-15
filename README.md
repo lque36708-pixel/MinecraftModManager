@@ -39,7 +39,7 @@ Before installing mods in a directory, set your target Minecraft version and loa
   ```bash
   3m install sodium, lithium, iris
   ```
-- **From File** (one mod slug per line):
+- **From File** (one mod name per line):
   ```bash
   3m install -f mods.txt
   ```

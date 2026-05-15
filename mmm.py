@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-3m — Minecraft Mod Manager
+mmm — Minecraft Mod Manager
 Download mods from Modrinth with automatic dependency resolution.
 """
 
@@ -24,11 +24,16 @@ from rich.console import Console as RichConsole
 #  Constants
 # ══════════════════════════════════════════════════════════════════════════════
 
-VERSION    = "3.0.0"
+VERSION    = "0.1.0"
 API_BASE   = "https://api.modrinth.com/v2"
-USER_AGENT = f"3m-cli/{VERSION} (minecraft-mod-manager)"
+USER_AGENT = f"mmm-cli/{VERSION} (minecraft-mod-manager)"
 
 KNOWN_LOADERS = ("fabric", "forge", "quilt", "neoforge")
+
+API_HINTS = {
+    "fabric": ("fabric-api", "Fabric API"),
+    "quilt":  ("qsl", "Quilt Standard Libraries (QSL)"),
+}
 # ══════════════════════════════════════════════════════════════════════════════
 #  ANSI colors
 # ══════════════════════════════════════════════════════════════════════════════
@@ -177,7 +182,7 @@ def profile_path():
     return Path.cwd() / "profile.json"
 
 def cache_path():
-    return Path.cwd() / ".3m_cache.json"
+    return Path.cwd() / ".mmm_cache.json"
 
 def load_profile():
     p = profile_path()
@@ -201,7 +206,7 @@ def require_profile():
     p = load_profile()
     if not p:
         err("No profile set in this directory. Run first:")
-        print(f"    {GOLD}3m set-profile 1.21.1 fabric{RESET}\n")
+        print(f"    {GOLD}mmm set-profile 1.21.1 fabric{RESET}\n")
         sys.exit(1)
     return p
 
@@ -253,7 +258,7 @@ def metadata_path():
 
 def _empty_metadata():
     return {
-        "3m_version": VERSION,
+        "mmm_version": VERSION,
         "mc_version": "",
         "loader":     "",
         "updated_at": _now_iso(),
@@ -677,6 +682,10 @@ def cmd_set_profile(args):
     header("Profile updated")
     print(f"  {SLATE}Minecraft  {RESET}{BWHITE}{mc}{RESET}")
     print(f"  {SLATE}Loader     {RESET}{loader_badge(loader)}")
+    if loader in API_HINTS:
+        slug, label = API_HINTS[loader]
+        print(f"\n  {SKY}💡{RESET}  {dim('Many mods need')} {BWHITE}{label}{RESET}{dim(' but may not declare it as a dependency.')}")
+        print(f"       {GOLD}mmm get {slug}{RESET}")
     print()
 
 
@@ -715,7 +724,7 @@ def cmd_get(args):
     if args.i is not None:
         cache = load_cache()
         if not cache:
-            err("No search results cached. Run: 3m search <name>")
+            err("No search results cached. Run: mmm search <name>")
             sys.exit(1)
         idx = args.i - 1
         if idx < 0 or idx >= len(cache):
@@ -814,7 +823,7 @@ def cmd_show(args):
         else:
             cache = load_cache()
             if not cache:
-                err("No search results cached. Run: 3m search <name>")
+                err("No search results cached. Run: mmm search <name>")
                 sys.exit(1)
             idx = args.i - 1
             if idx < 0 or idx >= len(cache):
@@ -904,7 +913,7 @@ def cmd_list(args):
         warn("No mods tracked in metadata.")
         jars = sorted(dest_dir.glob("*.jar"))
         if jars:
-            info(f"Found {len(jars)} .jar files not tracked by 3m.")
+            info(f"Found {len(jars)} .jar files not tracked by mmm.")
             for j in jars:
                 print(f"    {SLATE}{j.name}{RESET}")
         print()
@@ -963,7 +972,16 @@ def cmd_list(args):
     else:
         size_display = f"{total_kb:,} KB"
     print(f"  {dim(str(len(mods)) + ' mod(s) tracked  ·  ' + size_display + ' on disk')}\n")
-    print(f"  {dim('Remove by name: 3m remove <name>    Remove by index: 3m remove -i <n>')}\n")
+
+    # ── API hint ──────────────────────────────────────────────────────────────
+    profile = load_profile()
+    if profile:
+        slug, label = API_HINTS.get(profile["loader"], (None, None))
+        if slug and slug not in mods:
+            print(f"  {SKY}💡{RESET}  {dim('You have')} {BWHITE}{profile['loader'].capitalize()}{RESET}{dim(' mods but')} {BWHITE}{label}{RESET}{dim(' is missing.')}")
+            print(f"       {GOLD}mmm get {slug}{RESET}\n")
+
+    print(f"  {dim('Remove by name: mmm remove <name>    Remove by index: mmm remove -i <n>')}\n")
 
 
 def cmd_remove(args):
@@ -1095,7 +1113,7 @@ def cmd_profile(args):
         print()
     else:
         warn("No profile set.")
-        print(f"  {dim('Example: 3m set-profile 1.21.1 fabric')}\n")
+        print(f"  {dim('Example: mmm set-profile 1.21.1 fabric')}\n")
 
 
 def cmd_autoremove(args):
@@ -1143,7 +1161,7 @@ def cmd_autoremove(args):
 def print_help():
     banner = f"""
 {MINT}  ┌──────────────────────────────────────────────────────┐{RESET}
-{MINT}  │{RESET}  {BWHITE}3m{RESET}  {SLATE}—{RESET}  {BCYAN}Minecraft Mod Manager{RESET}  {dim('v' + VERSION)}               {MINT}│{RESET}
+{MINT}  │{RESET}  {BWHITE}mmm{RESET}  {SLATE}—{RESET}  {BCYAN}Minecraft Mod Manager{RESET}  {dim('v' + VERSION)}               {MINT}│{RESET}
 {MINT}  │{RESET}  {dim('Downloads from Modrinth · Resolves deps · No bloat')}  {MINT}│{RESET}
 {MINT}  └──────────────────────────────────────────────────────┘{RESET}
 """
@@ -1158,52 +1176,52 @@ def print_help():
             f"{BYELLOW}set-profile{RESET} {CYAN}<mc_version> <loader>{RESET}",
             "Set Minecraft version and mod loader.",
             [f"{dim('Loaders:')}  fabric  forge  quilt  neoforge",
-             f"{GOLD}3m set-profile 1.21.1 fabric{RESET}"]
+             f"{GOLD}mmm set-profile 1.21.1 fabric{RESET}"]
         ),
         (
             f"{BYELLOW}search{RESET} {CYAN}<query>{RESET}  {dim('[-n <count>] [--no-filter] [--filter-version V] [--filter-loader L]')}",
             "Search mods. Results are numbered for get/show.",
-            [f"{GOLD}3m search sodium{RESET}",
-             f"{GOLD}3m search \"performance\" -n 15{RESET}",
-             f"{GOLD}3m search sodium --no-filter{RESET}",
-             f"{GOLD}3m search sodium --filter-version 1.21.1 --filter-loader fabric{RESET}"]
+            [f"{GOLD}mmm search sodium{RESET}",
+             f"{GOLD}mmm search \"performance\" -n 15{RESET}",
+             f"{GOLD}mmm search sodium --no-filter{RESET}",
+             f"{GOLD}mmm search sodium --filter-version 1.21.1 --filter-loader fabric{RESET}"]
         ),
         (
             f"{BYELLOW}get{RESET} {CYAN}<name>{RESET}  {SLATE}|{RESET}  {BYELLOW}get{RESET} {CYAN}-i <index>{RESET}  {SLATE}|{RESET}  {BYELLOW}get{RESET} {CYAN}-f <file>{RESET}",
             "Install mod(s) to current directory. Resolves required deps automatically.",
-            [f"{GOLD}3m get sodium{RESET}",
-             f"{GOLD}3m get -i 3{RESET}",
-             f"{GOLD}3m get -f mods.txt{RESET}",
-             f"{GOLD}3m get sodium, lithium, iris, immediately fast{RESET}"]
+            [f"{GOLD}mmm get sodium{RESET}",
+             f"{GOLD}mmm get -i 3{RESET}",
+             f"{GOLD}mmm get -f mods.txt{RESET}",
+             f"{GOLD}mmm get sodium, lithium, iris, immediately fast{RESET}"]
         ),
         (
             f"{BYELLOW}show{RESET} {CYAN}<name>{RESET}  {SLATE}|{RESET}  {BYELLOW}show{RESET} {CYAN}-i <index>{RESET}",
             "Show full mod info: version, size, deps, checksums.",
-            [f"{GOLD}3m show sodium{RESET}",
-             f"{GOLD}3m show -i 1{RESET}"]
+            [f"{GOLD}mmm show sodium{RESET}",
+             f"{GOLD}mmm show -i 1{RESET}"]
         ),
         (
             f"{BYELLOW}list{RESET}",
             "List all tracked mods with sizes and dependency graph.",
-            [f"{GOLD}3m list{RESET}"]
+            [f"{GOLD}mmm list{RESET}"]
         ),
         (
             f"{BYELLOW}remove{RESET} {CYAN}<name>{RESET}  {SLATE}|{RESET}  {BYELLOW}remove{RESET} {CYAN}-i <index>{RESET}  {SLATE}|{RESET}  {BYELLOW}remove -a{RESET}",
             "Remove mod(s). Warns before removing if other mods depend on it.",
-            [f"{GOLD}3m remove sodium{RESET}",
-             f"{GOLD}3m remove -i 1{RESET}",
-             f"{GOLD}3m remove -a{RESET}",
-             f"{GOLD}3m remove sodium, lithium{RESET}"]
+            [f"{GOLD}mmm remove sodium{RESET}",
+             f"{GOLD}mmm remove -i 1{RESET}",
+             f"{GOLD}mmm remove -a{RESET}",
+             f"{GOLD}mmm remove sodium, lithium{RESET}"]
         ),
         (
             f"{BYELLOW}profile{RESET}",
             "View current profile and cache info.",
-            [f"{GOLD}3m profile{RESET}"]
+            [f"{GOLD}mmm profile{RESET}"]
         ),
         (
             f"{BYELLOW}autoremove{RESET}",
             "Remove orphaned dependencies no longer required by any mod.",
-            [f"{GOLD}3m autoremove{RESET}"]
+            [f"{GOLD}mmm autoremove{RESET}"]
         ),
     ]
 
@@ -1234,18 +1252,18 @@ def print_help():
     print(f"  {BWHITE}QUICK WORKFLOW{RESET}\n")
     steps = [
         ("# First time — set profile",
-         ["3m set-profile 1.21.1 fabric"]),
+         ["mmm set-profile 1.21.1 fabric"]),
         ("# Install optimization mods",
          ["cd ~/minecraft/mods",
-          "3m get sodium, lithium, iris, immediately fast, ferritecore, entityculling"]),
+          "mmm get sodium, lithium, iris, immediately fast, ferritecore, entityculling"]),
         ("# Search, preview, then install",
-         ["3m search \"chunk loading\"",
-          "3m show -i 1",
-          "3m get -i 1"]),
+         ["mmm search \"chunk loading\"",
+          "mmm show -i 1",
+          "mmm get -i 1"]),
         ("# Check what's installed",
-         ["3m list"]),
+         ["mmm list"]),
         ("# Remove a mod (will warn about dependents)",
-         ["3m remove sodium"]),
+         ["mmm remove sodium"]),
     ]
     for comment, cmds in steps:
         print(f"  {SLATE}{comment}{RESET}")
@@ -1261,7 +1279,7 @@ def print_help():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    parser = argparse.ArgumentParser(prog="3m", add_help=False)
+    parser = argparse.ArgumentParser(prog="mmm", add_help=False)
     parser.add_argument("-h", "--help",    action="store_true")
     parser.add_argument("-v", "--version", action="store_true")
 
@@ -1302,7 +1320,7 @@ def main():
     args = parser.parse_args()
 
     if args.version:
-        print(f"{BWHITE}3m{RESET} version {GOLD}{VERSION}{RESET}")
+        print(f"{BWHITE}mmm{RESET} version {GOLD}{VERSION}{RESET}")
         return
 
     if args.help or args.cmd is None:

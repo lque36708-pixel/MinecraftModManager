@@ -3,9 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 BASHRC="$HOME/.bashrc"
-MARKER="# 3m"
+MARKER="# mmm"
 
-echo "  › Installing 3m — adding aliases to $BASHRC"
+echo "  › Installing mmm — adding alias to $BASHRC"
 
 if grep -qF "$MARKER" "$BASHRC" 2>/dev/null; then
     echo "  ✔ Already installed. Updating path..."
@@ -15,8 +15,7 @@ fi
 cat >> "$BASHRC" <<EOF
 
 $MARKER
-alias 3m="python3 $SCRIPT_DIR/3m.py"
-alias mmm="python3 $SCRIPT_DIR/3m.py"
+alias mmm="python3 $SCRIPT_DIR/mmm.py"
 $MARKER
 EOF
 

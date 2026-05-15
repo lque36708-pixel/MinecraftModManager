@@ -1,18 +1,19 @@
-# 3m — Minecraft Mod Manager
+# mmm — Minecraft Mod Manager
 
-`3m` (or `mmm`) is a lightweight, dependency-aware CLI tool to manage Minecraft mods from [Modrinth](https://modrinth.com/).
+`mmm` is a lightweight, dependency-aware CLI tool to manage Minecraft mods from [Modrinth](https://modrinth.com/).
 
 ## Features
 - **Local Profiles**: Manages mod profiles independently for each project directory.
 - **Dependency Resolution**: Automatically and recursively installs all required dependencies.
 - **Bulk Installation**: Supports installing mods from command-line arguments or text files.
+- **Flexible Search**: Filter by version/loader or disable filters entirely.
 - **Lightweight**: Single Python file, no bloat, no API keys required, no background tracking.
 
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/3m.git
-cd 3m
+git clone https://github.com/yourusername/mmm.git
+cd mmm
 ./install.sh
 ```
 
@@ -21,7 +22,7 @@ Then restart your terminal or run `source ~/.bashrc`.
 ### Uninstall
 
 ```bash
-cd 3m
+cd mmm
 ./uninstall.sh
 ```
 
@@ -31,41 +32,57 @@ cd 3m
 Before installing mods in a directory, set your target Minecraft version and loader:
 
 ```bash
-3m set-profile 1.21.1 fabric
+mmm set-profile 1.21.1 fabric
 ```
 
-### 2. Install Mods
-- **By Name**:
+### 2. Search Mods
+Search filters use your profile by default, or can be overridden:
+
+```bash
+mmm search sodium                                          # uses profile (1.21.1 / fabric)
+mmm search sodium --no-filter                               # search all versions/loaders
+mmm search sodium --filter-version 1.20.4 --filter-loader forge  # specific filter
+```
+
+### 3. Install Mods
+- **By Name** (dependencies auto-resolved):
   ```bash
-  3m install sodium, lithium, iris
+  mmm install sodium, lithium, iris
   ```
-- **From File** (one mod name per line):
+  Example: `mmm install indium` automatically downloads **sodium** as a dependency.
+
+- **From File** (one mod slug per line):
   ```bash
-  3m install -f mods.txt
+  mmm install -f mods.txt
   ```
 - **By Search Index**:
   ```bash
-  3m search sodium
-  3m show -i 1
-  3m install -i 1
+  mmm search sodium
+  mmm show -i 1
+  mmm install -i 1
   ```
 
-### 3. Management
+### 4. Management
 - **List installed mods**:
   ```bash
-  3m ls
+  mmm ls
   ```
-- **Show mod details**:
+- **Show mod details** (full markdown description):
   ```bash
-  3m show sodium
+  mmm show sodium
+  mmm show -i 1        # by list/search index
   ```
 - **Remove a mod**:
   ```bash
-  3m rm sodium
+  mmm rm sodium
   ```
 - **Autoremove unused dependencies**:
   ```bash
-  3m autoremove
+  mmm autoremove
+  ```
+- **View current profile**:
+  ```bash
+  mmm profile
   ```
 
 ## Commands

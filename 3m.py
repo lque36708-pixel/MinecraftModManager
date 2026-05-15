@@ -366,13 +366,15 @@ def fuzzy_match(name, choices, threshold=0.6):
             best = c
     return best
 
-def search_mods(query, profile, limit=10):
-    facets = json.dumps([
-        [f"versions:{profile['mc_version']}"],
-        [f"categories:{profile['loader']}"],
-        ["project_type:mod"],
-    ])
-    data = api_get("/search", {"query": query, "facets": facets, "limit": limit})
+def search_mods(query, mc_version=None, loader=None, no_filter=False, limit=10):
+    facets = []
+    if not no_filter:
+        if mc_version:
+            facets.append([f"versions:{mc_version}"])
+        if loader:
+            facets.append([f"categories:{loader}"])
+    facets.append(["project_type:mod"])
+    data = api_get("/search", {"query": query, "facets": json.dumps(facets), "limit": limit})
     if data is None:
         return []
     return data.get("hits", [])
@@ -404,7 +406,7 @@ def get_primary_file(version):
 
 def get_slug_from_name(name, profile, limit=5):
     """Resolve a user-typed name to a Modrinth slug."""
-    hits = search_mods(name, profile, limit=limit)
+    hits = search_mods(name, mc_version=profile["mc_version"], loader=profile["loader"], limit=limit)
     for hit in hits:
         slug = hit.get("slug", "")
         if slug.lower() == normalize_slug(name) or hit.get("title", "").lower() == name.lower():
@@ -600,14 +602,16 @@ def render_markdown(text, width=None):
     return buf.getvalue().rstrip("\n")
 
 
-def print_search_results(results, profile, query=""):
+def print_search_results(results, query="", mc_version=None, loader=None, no_filter=False):
     if not results:
         warn("No results found.")
         return
 
+    subtitle = "No filters" if no_filter else f"Minecraft {mc_version}  ·  {loader.capitalize()}" if mc_version and loader else "All versions / all loaders" if not mc_version and not loader else f"{f'Minecraft {mc_version}' if mc_version else 'All versions'}  ·  {f'{loader.capitalize()}' if loader else 'All loaders'}"
+
     header(
         f"Search results  {dim('» ' + query)}",
-        f"Minecraft {profile['mc_version']}  ·  {profile['loader'].capitalize()}"
+        subtitle
     )
 
     for i, hit in enumerate(results, 1):
@@ -636,35 +640,39 @@ def print_search_results(results, profile, query=""):
     print()
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Commands
+#  Validation helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
-def cmd_set_profile(args):
-    mc     = args.mc_version
-    loader = args.loader.lower()
-
-    # ── Validate Loader ───────────────────────────────────────────────────────
+def validate_loader(loader):
     if loader not in KNOWN_LOADERS:
         err(f"Invalid loader '{loader}'")
         info(f"Supported loaders: {', '.join(f'{GOLD}{l}{RESET}' for l in KNOWN_LOADERS)}")
         sys.exit(1)
 
-    # ── Validate MC Version ───────────────────────────────────────────────────
+def validate_mc_version(mc):
     step(f"Verifying Minecraft version {BWHITE}{mc}{RESET}...")
     versions = api_get("/tag/game_version")
     if versions:
         valid_versions = [v["version"] for v in versions]
         if mc not in valid_versions:
             err(f"Minecraft version {BWHITE}{mc}{RESET} is invalid or not supported by Modrinth.")
-            # Suggest close matches
             matches = []
             for v in valid_versions:
-                if v.startswith(mc[:4]): # e.g. "1.21"
+                if v.startswith(mc[:4]):
                     matches.append(v)
             if matches:
                 info(f"Did you mean: {', '.join(matches[:5])}?")
             sys.exit(1)
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Commands
+# ══════════════════════════════════════════════════════════════════════════════
+
+def cmd_set_profile(args):
+    mc     = args.mc_version
+    loader = args.loader.lower()
+    validate_loader(loader)
+    validate_mc_version(mc)
     save_profile(mc, loader)
     header("Profile updated")
     print(f"  {SLATE}Minecraft  {RESET}{BWHITE}{mc}{RESET}")
@@ -676,17 +684,28 @@ def cmd_search(args):
     profile = require_profile()
     query   = " ".join(args.query)
     limit   = args.limit or 10
-    info(f"Searching {BWHITE}'{query}'{RESET}  "
-         f"{dim('[' + profile['mc_version'] + ' / ' + profile['loader'] + ']')}")
-    results = search_mods(query, profile, limit=limit)
+    no_filter = getattr(args, "no_filter", False)
+
+    mc_version = profile["mc_version"]
+    loader     = profile["loader"]
+
+    if getattr(args, "filter_version", None):
+        mc_version = args.filter_version
+        validate_mc_version(mc_version)
+    if getattr(args, "filter_loader", None):
+        loader = args.filter_loader.lower()
+        validate_loader(loader)
+
+    label = "No filters" if no_filter else f"[{mc_version} / {loader}]" if mc_version and loader else f"[{mc_version or 'any version'} / {loader or 'any loader'}]"
+    info(f"Searching {BWHITE}'{query}'{RESET}  {dim(label)}")
+    results = search_mods(query, mc_version=mc_version, loader=loader, no_filter=no_filter, limit=limit)
     save_cache(results, query)
-    print_search_results(results, profile, query)
+    print_search_results(results, query, mc_version=mc_version, loader=loader, no_filter=no_filter)
 
 
 def cmd_get(args):
     profile  = require_profile()
     dest_dir = Path.cwd()
-    auto_deps = not getattr(args, "no_deps", False)
 
     metadata = load_metadata()
     metadata["mc_version"] = profile["mc_version"]
@@ -705,10 +724,7 @@ def cmd_get(args):
         slug = cache[idx]["slug"]
         header("Installing mod", str(dest_dir))
         print(f"  {SLATE}[1/1]{RESET}  ", end="")
-        if auto_deps:
-            install_mod(slug, profile, dest_dir, metadata)
-        else:
-            install_mod(slug, profile, dest_dir, metadata, seen=set())
+        install_mod(slug, profile, dest_dir, metadata)
         save_metadata(metadata)
         print()
         return
@@ -732,9 +748,6 @@ def cmd_get(args):
         err("Usage: get <name>  or  get -i <index>  or  get -f <file>")
         sys.exit(1)
 
-    if not auto_deps:
-        print(f"  {dim('Skipping dependencies (--no-deps)')}\n")
-
     if file_label:
         header("Installing mods from file", file_label)
     else:
@@ -748,11 +761,7 @@ def cmd_get(args):
 
     for idx, name in enumerate(mods, 1):
         print(f"  {SLATE}[{idx}/{len(mods)}]{RESET}  ", end="")
-        if auto_deps:
-            slug = install_mod(name, profile, dest_dir, metadata, seen=seen)
-        else:
-            slug = install_mod(name, profile, dest_dir, metadata,
-                               seen=seen | set(metadata.get("mods", {}).keys()))
+        slug = install_mod(name, profile, dest_dir, metadata, seen=seen)
 
         if slug:
             ok_count += 1
@@ -1152,10 +1161,12 @@ def print_help():
              f"{GOLD}3m set-profile 1.21.1 fabric{RESET}"]
         ),
         (
-            f"{BYELLOW}search{RESET} {CYAN}<query>{RESET}  {dim('[-n <count>]')}",
+            f"{BYELLOW}search{RESET} {CYAN}<query>{RESET}  {dim('[-n <count>] [--no-filter] [--filter-version V] [--filter-loader L]')}",
             "Search mods. Results are numbered for get/show.",
             [f"{GOLD}3m search sodium{RESET}",
-             f"{GOLD}3m search \"performance optimization\" -n 15{RESET}"]
+             f"{GOLD}3m search \"performance\" -n 15{RESET}",
+             f"{GOLD}3m search sodium --no-filter{RESET}",
+             f"{GOLD}3m search sodium --filter-version 1.21.1 --filter-loader fabric{RESET}"]
         ),
         (
             f"{BYELLOW}get{RESET} {CYAN}<name>{RESET}  {SLATE}|{RESET}  {BYELLOW}get{RESET} {CYAN}-i <index>{RESET}  {SLATE}|{RESET}  {BYELLOW}get{RESET} {CYAN}-f <file>{RESET}",
@@ -1163,7 +1174,6 @@ def print_help():
             [f"{GOLD}3m get sodium{RESET}",
              f"{GOLD}3m get -i 3{RESET}",
              f"{GOLD}3m get -f mods.txt{RESET}",
-             f"{GOLD}3m get --no-deps sodium{RESET}",
              f"{GOLD}3m get sodium, lithium, iris, immediately fast{RESET}"]
         ),
         (
@@ -1264,11 +1274,16 @@ def main():
     sp = sub.add_parser("search", add_help=False)
     sp.add_argument("query", nargs="+")
     sp.add_argument("-n", "--limit", type=int, default=10)
+    sp.add_argument("--no-filter", action="store_true",
+                    help="Search without version/loader filters")
+    sp.add_argument("--filter-version", metavar="VERSION",
+                    help="Filter by Minecraft version (overrides profile)")
+    sp.add_argument("--filter-loader", metavar="LOADER",
+                    help="Filter by mod loader (overrides profile)")
 
     sp = sub.add_parser("get", add_help=False, aliases=["install"])
     sp.add_argument("-i", type=int, metavar="INDEX")
     sp.add_argument("-f", metavar="FILE", help="Read mod list from file")
-    sp.add_argument("--no-deps", action="store_true")
     sp.add_argument("names", nargs="*")
 
     sp = sub.add_parser("show", add_help=False)

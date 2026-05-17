@@ -50,8 +50,9 @@ source ~/.zshrc
 ### Windows (PowerShell / CMD)
 
 1. Install Python 3.8+ from [python.org](https://python.org) — ensure **Add to PATH** is checked.
-2. Clone and run install:
+2. Allow script execution (one-time), then clone and install:
    ```powershell
+   Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
    git clone https://github.com/lque36708-pixel/MinecraftModManager.git
    cd MinecraftModManager
    pip install rich

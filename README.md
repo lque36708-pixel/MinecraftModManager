@@ -11,6 +11,7 @@ Each project directory keeps its own `profile.json` (version/loader) and `metada
 - **Bulk Installation** — Install multiple mods at once via comma-separated names, search indexes, or `.txt` files.
 - **Smart Search** — Filter by Minecraft version and mod loader, or disable filters to search everything.
 - **Dependency-Aware Removal** — Warns if other mods depend on what you're removing.
+- **One-Command Update** — Update all installed mods to the latest version in one go.
 - **Autoremove Orphans** — Clean up unused dependencies in one command.
 - **SHA-512 Verification** — Every download is checksum-verified automatically.
 - **No Login Required** — No API key, no account, no background services. Just `mmm` and a terminal.
@@ -99,7 +100,10 @@ mmm list
 # 5. Remove a mod (warns if other mods depend on it)
 mmm remove sodium
 
-# 6. Clean up orphaned dependencies
+# 6. Update all mods to latest versions
+mmm update
+
+# 7. Clean up orphaned dependencies
 mmm autoremove
 ```
 
@@ -193,12 +197,15 @@ mmm remove -a                                   # remove everything (nuclear)
 
 Alias: `mmm rm` (same as `mmm remove`)
 
-### `autoremove`
+### `update [name]`
 
-Find and remove dependencies that are no longer required by any installed mod.
+Update installed mods to the latest version. New dependencies introduced by the updated version are auto-installed.
 
 ```bash
-mmm autoremove
+mmm update                           # update all mods (requested + deps)
+mmm update sodium                    # update specific mod
+mmm update sodium, lithium           # update multiple mods
+mmm update --dry-run                 # preview without downloading
 ```
 
 ### `profile`
@@ -326,6 +333,7 @@ rm -rf MinecraftModManager
 | `show <name>` | — | Show detailed mod info |
 | `list` | `ls` | List installed mods |
 | `remove <name>` | `rm` | Remove mod(s) |
+| `update [name]` | — | Update all (or specific) installed mods to latest version |
 | `autoremove` | — | Clean up orphaned dependencies |
 | `profile` | — | View current profile |
 

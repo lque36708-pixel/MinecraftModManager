@@ -141,6 +141,16 @@ Flags:
 
 Install one or more mods to the current directory. Required dependencies are resolved and downloaded automatically.
 
+**`<name>` is the Modrinth slug** (the exact URL identifier), not a search term.
+**If you don't know the slug**, search first and install by index:
+
+```bash
+mmm search sodium       # find the mod
+mmm get -i 1            # install search result #1
+```
+
+By slug (you must type the exact slug):
+
 ```bash
 mmm get sodium                                  # single mod by slug
 mmm get sodium, lithium, iris                   # multiple mods (comma-separated)
@@ -320,7 +330,7 @@ rm -rf MinecraftModManager
 |---------|-------|-------------|
 | `set-profile <ver> <loader>` | — | Set MC version and loader for this directory |
 | `search <query>` | — | Search Modrinth for mods |
-| `get <name>` | `install` | Install mod(s) with dependency resolution |
+| `get <slug>` | `install` | Install mod(s) with dependency resolution (slug, not display name) |
 | `show <name>` | — | Show detailed mod info |
 | `list` | `ls` | List installed mods |
 | `remove <name>` | `rm` | Remove mod(s) |

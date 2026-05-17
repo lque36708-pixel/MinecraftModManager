@@ -6,6 +6,7 @@ class ProfileNotFoundError(MMMError):
         msg = "No profile set in this directory."
         if path:
             msg += f" ({path})"
+        msg += "\nMake sure you are in your Minecraft mods folder, then set a profile."
         super().__init__(msg)
 
 class ModNotFoundError(MMMError):

@@ -16,7 +16,6 @@ cat >> "$BASHRC" <<EOF
 
 $MARKER
 alias mmm="python3 $SCRIPT_DIR/mmm.py"
-alias mmmgui="python3 $SCRIPT_DIR/mmmgui.py"
 $MARKER
 EOF
 

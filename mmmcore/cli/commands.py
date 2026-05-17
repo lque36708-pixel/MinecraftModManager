@@ -27,6 +27,17 @@ from .display import (
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+def _require_profile():
+    try:
+        return require_profile()
+    except ProfileNotFoundError as e:
+        err(str(e))
+        print(f"\n  {SKY}💡{RESET}  {BWHITE}This should be your Minecraft mods folder.{RESET}")
+        print(f"  {SKY}💡{RESET}  Run:  {GOLD}mmm set-profile <mc_version> <loader>{RESET}")
+        print(f"       {dim('Example: mmm set-profile 1.21.1 fabric')}")
+        print(f"  {SKY}💡{RESET}  {dim('Or move to your mods folder and set the profile there.')}{RESET}\n")
+        sys.exit(1)
+
 def _install_status_callback(event, data):
     if event == "resolving":
         pass
@@ -103,13 +114,7 @@ def cmd_set_profile(args):
     print()
 
 def cmd_search(args):
-    try:
-        profile = require_profile()
-    except ProfileNotFoundError as e:
-        err(str(e))
-        print(f"    {GOLD}mmm set-profile 1.21.1 fabric{RESET}\n")
-        sys.exit(1)
-
+    profile = _require_profile()
     query   = " ".join(args.query)
     limit   = args.limit or 10
     no_filter = getattr(args, "no_filter", False)
@@ -145,13 +150,7 @@ def cmd_search(args):
     print_search_results(results, query, mc_version=mc_version, loader=loader, no_filter=no_filter)
 
 def cmd_get(args):
-    try:
-        profile = require_profile()
-    except ProfileNotFoundError as e:
-        err(str(e))
-        print(f"    {GOLD}mmm set-profile 1.21.1 fabric{RESET}\n")
-        sys.exit(1)
-
+    profile = _require_profile()
     dest_dir = Path.cwd()
     metadata = load_metadata()
     metadata["mc_version"] = profile["mc_version"]
@@ -242,13 +241,7 @@ def cmd_get(args):
         print()
 
 def cmd_show(args):
-    try:
-        profile = require_profile()
-    except ProfileNotFoundError as e:
-        err(str(e))
-        print(f"    {GOLD}mmm set-profile 1.21.1 fabric{RESET}\n")
-        sys.exit(1)
-
+    profile = _require_profile()
     if args.names:
         raw  = " ".join(args.names)
         try:
@@ -345,6 +338,7 @@ def cmd_show(args):
     print(f"\n  {TEAL}🌐  https://modrinth.com/mod/{slug}{RESET}\n")
 
 def cmd_list(args):
+    profile = _require_profile()
     dest_dir = Path.cwd()
     metadata = load_metadata()
     mods     = metadata.get("mods", {})
@@ -414,16 +408,15 @@ def cmd_list(args):
         size_display = f"{total_kb:,} KB"
     print(f"  {dim(str(len(mods)) + ' mod(s) tracked  ·  ' + size_display + ' on disk')}\n")
 
-    profile = load_profile()
-    if profile:
-        slug, label = API_HINTS.get(profile["loader"], (None, None))
-        if slug and slug not in mods:
-            print(f"  {SKY}💡{RESET}  {dim('You have')} {BWHITE}{profile['loader'].capitalize()}{RESET}{dim(' mods but')} {BWHITE}{label}{RESET}{dim(' is missing.')}")
-            print(f"       {GOLD}mmm get {slug}{RESET}\n")
+    slug, label = API_HINTS.get(profile["loader"], (None, None))
+    if slug and slug not in mods:
+        print(f"  {SKY}💡{RESET}  {dim('You have')} {BWHITE}{profile['loader'].capitalize()}{RESET}{dim(' mods but')} {BWHITE}{label}{RESET}{dim(' is missing.')}")
+        print(f"       {GOLD}mmm get {slug}{RESET}\n")
 
     print(f"  {dim('Remove by name: mmm remove <name>    Remove by index: mmm remove -i <n>')}\n")
 
 def cmd_remove(args):
+    _require_profile()
     dest_dir = Path.cwd()
     metadata = load_metadata()
     mods     = metadata.get("mods", {})
@@ -538,9 +531,13 @@ def cmd_profile(args):
         print()
     else:
         warn("No profile set.")
-        print(f"  {dim('Example: mmm set-profile 1.21.1 fabric')}\n")
+        print(f"\n  {SKY}💡{RESET}  {BWHITE}This should be your Minecraft mods folder.{RESET}")
+        print(f"  {SKY}💡{RESET}  Run:  {GOLD}mmm set-profile <mc_version> <loader>{RESET}")
+        print(f"       {dim('Example: mmm set-profile 1.21.1 fabric')}")
+        print(f"  {SKY}💡{RESET}  {dim('Or move to your mods folder and set the profile there.')}{RESET}\n")
 
 def cmd_autoremove(args):
+    _require_profile()
     dest_dir = Path.cwd()
     metadata = load_metadata()
     mods = metadata.get("mods", {})

@@ -19,5 +19,5 @@ def run():
     from .main_window import MainWindow
     app = get_app()
     w = MainWindow()
-    w.show()
+    w.showMaximized()
     sys.exit(app.exec_())

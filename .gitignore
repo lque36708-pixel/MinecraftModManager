@@ -18,4 +18,4 @@ build/
 dist/
 *.egg-info/
 .git/
-.test/
+test/

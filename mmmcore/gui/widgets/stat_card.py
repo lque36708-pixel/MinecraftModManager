@@ -7,12 +7,12 @@ def stat_card(value, label):
     frame.setObjectName("statCard")
     frame.setStyleSheet("""
         QFrame#statCard {
-            background:#313244; border-radius:8px; padding:12px;
+            background:#313244; border-radius:8px;
         }
     """)
     layout = QVBoxLayout(frame)
-    layout.setSpacing(4)
-    layout.setContentsMargins(16, 14, 16, 14)
+    layout.setSpacing(2)
+    layout.setContentsMargins(8, 8, 8, 8)
 
     v = QLabel(str(value))
     v.setObjectName("statValue")

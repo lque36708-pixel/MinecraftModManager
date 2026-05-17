@@ -1,9 +1,14 @@
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
+import re
+import markdown
+
+from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from PyQt5.QtGui import QColor, QPixmap, QImage
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QTextBrowser, QProgressBar,
 )
+from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from PyQt5.QtGui import QTextDocument
 from pathlib import Path
 
 from ..workers import ProjectWorker, InstallWorker
@@ -20,6 +25,56 @@ INSTALL_STYLE = "background:#89b4fa; color:#1e1e2e;"
 UNINSTALL_STYLE = "background:#f38ba8; color:#1e1e2e;"
 
 
+class DetailTextBrowser(QTextBrowser):
+    resource_loaded = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._net = QNetworkAccessManager(self)
+        self._loading = set()
+
+    def loadResource(self, resource_type, url):
+        if resource_type == QTextDocument.ImageResource and url.scheme() in ("http", "https"):
+            url_str = url.toString()
+            if url_str not in self._loading:
+                self._loading.add(url_str)
+                reply = self._net.get(QNetworkRequest(QUrl(url_str)))
+                reply.finished.connect(lambda r=reply, u=url: self._on_image(r, u))
+            pix = QPixmap(1, 1)
+            pix.fill(Qt.transparent)
+            return pix
+        return super().loadResource(resource_type, url)
+
+    def _scale_pixmap(self, pix):
+        max_w = int(self.document().textWidth())
+        if max_w > 0 and pix.width() > max_w:
+            return pix.scaledToWidth(max_w, Qt.SmoothTransformation)
+        return pix
+
+    def _on_image(self, reply, url):
+        data = reply.readAll()
+        if data:
+            pix = QPixmap()
+            if pix.loadFromData(data):
+                pix = self._scale_pixmap(pix)
+                self.document().addResource(QTextDocument.ImageResource, url, pix)
+            else:
+                try:
+                    from PIL import Image as PILImage
+                    import io
+                    pil = PILImage.open(io.BytesIO(bytes(data))).convert("RGBA")
+                    qt_img = QImage(pil.tobytes(), pil.width, pil.height, QImage.Format_RGBA8888)
+                    pix = QPixmap.fromImage(qt_img)
+                    pix = self._scale_pixmap(pix)
+                    self.document().addResource(QTextDocument.ImageResource, url, pix)
+                except Exception:
+                    pass
+            tw = self.document().textWidth()
+            if tw > 0:
+                self.document().setTextWidth(tw)
+            self.resource_loaded.emit()
+
+
 class DetailPage(QWidget):
     def __init__(self, image_loader, parent=None):
         super().__init__(parent)
@@ -27,6 +82,8 @@ class DetailPage(QWidget):
         self._slug = ""
         self._installed = False
         self._install_worker = None
+        self._body_md = None
+        self._last_vp_w = None
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(24, 16, 24, 16)
@@ -62,7 +119,6 @@ class DetailPage(QWidget):
         self._layout.addWidget(self._scroll, 1)
 
         self._build_content()
-        self.hide()
 
     def _build_content(self):
         cl = self._content_layout
@@ -106,10 +162,12 @@ class DetailPage(QWidget):
         self._stat_fw = stat_card("—", "Followers")
         self._stat_lc = stat_card("—", "License")
         self._stat_ld = stat_card("—", "Loaders")
+        stat_row.addStretch()
         stat_row.addWidget(self._stat_dl)
         stat_row.addWidget(self._stat_fw)
         stat_row.addWidget(self._stat_lc)
         stat_row.addWidget(self._stat_ld)
+        stat_row.addStretch()
         cl.addLayout(stat_row)
 
         self._ver_info = QLabel()
@@ -117,28 +175,43 @@ class DetailPage(QWidget):
         self._ver_info.setWordWrap(True)
         cl.addWidget(self._ver_info)
 
-        self._desc = QTextBrowser()
+        self._desc = DetailTextBrowser()
         self._desc.setOpenExternalLinks(True)
         self._desc.setStyleSheet("background:transparent; border:none; color:#cdd6f4; font-size:13px;")
-        self._desc.setMaximumHeight(300)
+        self._desc.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._desc.resource_loaded.connect(self._stabilize_width)
         cl.addWidget(self._desc)
-
-        cl.addStretch()
 
     def load(self, slug):
         self._slug = slug
         self._installed = False
+
+        self._title.setText("Loading...")
+        self._author.setText("")
+        self._icon.clear()
         self._install_btn.setText("Install")
         self._install_btn.setStyleSheet("font-size:16px; font-weight:bold; border:none; border-radius:6px; padding:12px 32px;" + INSTALL_STYLE)
+        self._install_btn.setEnabled(True)
         self._progress.hide()
         self._ver_info.setText("")
         self._desc.clear()
+        self._desc._loading.clear()
+        self._body_md = None
+        self._last_vp_w = None
+
+        for card in (self._stat_dl, self._stat_fw, self._stat_lc, self._stat_ld):
+            labels = card.findChildren(QLabel)
+            if len(labels) >= 2:
+                labels[0].setText("—")
+                labels[1].setText(labels[1].text())
 
         meta = load_metadata()
         if slug in meta.get("mods", {}):
             self._installed = True
             self._install_btn.setStyleSheet("font-size:16px; font-weight:bold; border:none; border-radius:6px; padding:12px 32px;" + UNINSTALL_STYLE)
             self._install_btn.setText("Uninstall")
+
+        self.show()
 
         self._worker = ProjectWorker(slug)
         self._worker.finished.connect(self._on_project)
@@ -159,16 +232,9 @@ class DetailPage(QWidget):
         self._set_stat(self._stat_dl, project.get("downloads", 0), "Downloads")
         self._set_stat(self._stat_fw, project.get("followers", 0), "Followers")
         lic = (project.get("license") or {}).get("id", "—")
-        for lbl in self._stat_lc.findChildren(QLabel):
-            lbl.setText(lic if lbl.objectName() == "statValue" else "License")
-            break
-        for lbl in self._stat_lc.findChildren(QLabel):
-            pass
-        self._stat_lc.findChildren(QLabel)[0].setText(lic)
-        self._stat_lc.findChildren(QLabel)[1].setText("License")
+        self._set_stat(self._stat_lc, lic, "License")
         loaders = ", ".join(project.get("loaders", [])[:3]) or "—"
-        self._stat_ld.findChildren(QLabel)[0].setText(loaders)
-        self._stat_ld.findChildren(QLabel)[1].setText("Loaders")
+        self._set_stat(self._stat_ld, loaders, "Loaders")
 
         try:
             profile = require_profile()
@@ -191,13 +257,8 @@ class DetailPage(QWidget):
         else:
             self._ver_info.setText("No version matching current profile.")
 
-        body = project.get("body", "")
-        if body:
-            self._desc.setHtml(body)
-        else:
-            self._desc.clear()
-
-        self.show()
+        self._body_md = project.get("body", "")
+        QTimer.singleShot(0, self._render_body)
 
     def _set_stat(self, card, value, label):
         labels = card.findChildren(QLabel)
@@ -216,6 +277,45 @@ class DetailPage(QWidget):
 
     def _set_icon(self, pix):
         self._icon.setPixmap(pix.scaled(128, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def _render_body(self):
+        if not self._body_md:
+            self._desc.clear()
+            return
+        if self._body_md.strip().startswith("<"):
+            html = self._body_md
+        else:
+            html = markdown.markdown(self._body_md, extensions=["extra"])
+        if self._last_vp_w is not None and abs(self._scroll.viewport().width() - self._last_vp_w) < 20:
+            return
+        self._desc.setHtml(
+            f'<html><body style="color:#cdd6f4; font-size:15px; word-wrap:break-word;">{html}</body></html>'
+        )
+        scroll_w = self._scroll.viewport().width()
+        self._last_vp_w = scroll_w
+        self._desc.document().setTextWidth(scroll_w)
+        h = self._desc.document().size().height()
+        if h > 0:
+            self._desc.setMinimumHeight(int(h))
+            self._desc.setMaximumHeight(int(h))
+        QTimer.singleShot(0, self._stabilize_width)
+
+    def _stabilize_width(self):
+        vp_w = self._scroll.viewport().width()
+        cur_w = self._desc.width()
+        if cur_w > vp_w + 3:
+            self._desc.setFixedWidth(vp_w)
+            self._desc.document().setTextWidth(vp_w)
+        self._desc.setMaximumWidth(vp_w)
+        h = self._desc.document().size().height()
+        if h > 0:
+            self._desc.setMinimumHeight(int(h))
+            self._desc.setMaximumHeight(int(h))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._body_md is not None:
+            self._render_body()
 
     def _toggle_install(self):
         if self._installed:

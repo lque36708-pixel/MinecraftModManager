@@ -47,7 +47,7 @@ echo 'alias mmm="python3 /path/to/MinecraftModManager/mmm.py"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-### Windows (PowerShell)
+### Windows (PowerShell / CMD)
 
 1. Install Python 3.8+ from [python.org](https://python.org) — ensure **Add to PATH** is checked.
 2. Clone the repository:
@@ -59,11 +59,14 @@ source ~/.zshrc
    ```powershell
    pip install rich
    ```
-4. Add a function to your PowerShell profile for convenience:
+4. Install `mmm` (adds repo to your PATH):
    ```powershell
-   function mmm { python "$env:USERPROFILE\MinecraftModManager\mmm.py" @args }
+   .\install.ps1
    ```
-   Or just run `python mmm.py` directly in the repo folder.
+   Restart your terminal, then use `mmm` from any directory:
+   ```powershell
+   mmm --help
+   ```
 
 ### Verify Installation
 
@@ -316,7 +319,11 @@ rm -rf MinecraftModManager
 
 ### Windows
 
-1. Remove the function from your PowerShell profile.
+1. Run the uninstall script (removes repo from PATH):
+   ```powershell
+   cd MinecraftModManager
+   .\uninstall.ps1
+   ```
 2. Delete the cloned folder.
 3. Optionally remove `rich`:
    ```powershell

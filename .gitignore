@@ -19,3 +19,4 @@ dist/
 *.egg-info/
 .git/
 test/
+README (1).md

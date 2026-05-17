@@ -17,5 +17,5 @@ metadata.json
 build/
 dist/
 *.egg-info/
-
+.git/
 .test/

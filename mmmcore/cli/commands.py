@@ -9,11 +9,13 @@ from mmmcore.core import (
     save_cache, load_cache, load_cache_meta,
     search_mods, get_project, get_best_version, get_primary_file,
     get_slug_from_name, get_required_dependencies, install_mod,
+    download_file,
     validate_loader, validate_mc_version, fuzzy_match,
     normalize_slug, fmt_num,
     KNOWN_LOADERS, LOADER_COLORS, API_HINTS,
     ProfileNotFoundError, ModNotFoundError, ValidationError, MMMError,
 )
+from mmmcore.core.state import _now_iso
 from .display import (
     RESET, BOLD, DIM, ITALIC,
     RED, GREEN, YELLOW, BLUE, CYAN, WHITE,
@@ -67,13 +69,27 @@ def _install_status_callback(event, data):
             pct_s = f"{BYELLOW}{pct:3d}%{RESET}"
             print(f"\r    {bar} {pct_s}  {done}{tot_s}  {spd} ", end="", flush=True)
     elif event == "skip_exists":
-        skip(f"Already exists — {data.get('filename', '')}")
+        title  = data.get("title", data.get("slug", ""))
+        fname  = data.get("filename", "")
+        is_dep = data.get("is_dependency", False)
+        req_by = data.get("required_by", [])
+        if is_dep and req_by:
+            skip(f"Cannot get {BWHITE}{title}{RESET} — {fname} already exists {dim('(dependency of ' + ', '.join(req_by) + ')')}")
+        elif is_dep:
+            skip(f"Cannot get {BWHITE}{title}{RESET} — {fname} already exists {dim('(dependency mod)')}")
+        else:
+            skip(f"Cannot get {BWHITE}{title}{RESET} — {fname} already exists {dim('(requested mod)')}")
     elif event == "download_done":
-        ok(f"{data.get('title', '')}  {dim(data.get('filename', ''))}")
+        ok(f"Installed {BWHITE}{data.get('title', '')}{RESET}  {dim(data.get('filename', ''))}")
     elif event == "dependency":
         pass
     elif event == "already_seen":
-        pass
+        slug   = data.get("slug", "")
+        parent = data.get("parent_slug", "")
+        if parent:
+            skip(f"{BWHITE}{slug}{RESET} — already installed {dim('(dependency of ' + parent + ')')}")
+        else:
+            skip(f"{BWHITE}{slug}{RESET} — already installed")
 
 def _show_version_line(version, file_info, data_ver):
     vtype  = version.get("version_type", "?")
@@ -202,18 +218,25 @@ def cmd_get(args):
                str(dest_dir))
 
     seen        = set()
-    ok_count    = 0
-    fail_list   = []
-    install_map = []
+    installed_list = []
+    skipped_list   = []
+    fail_list      = []
+    install_map    = []
 
     for idx, name in enumerate(mods, 1):
         print(f"  {SLATE}[{idx}/{len(mods)}]{RESET}  ", end="")
         try:
-            slug = install_mod(name, profile, dest_dir, metadata, seen=seen,
-                              status_callback=_install_status_callback)
-            if slug:
-                ok_count += 1
-                install_map.append((name, slug))
+            result = install_mod(name, profile, dest_dir, metadata, seen=seen,
+                                status_callback=_install_status_callback)
+            if isinstance(result, tuple):
+                slug, action = result
+            else:
+                slug, action = result, "installed"
+            install_map.append((name, slug, action))
+            if action == "installed":
+                installed_list.append((name, slug))
+            elif action in ("skipped", "already_seen"):
+                skipped_list.append((name, slug))
             else:
                 fail_list.append(name)
         except MMMError as e:
@@ -221,21 +244,40 @@ def cmd_get(args):
             fail_list.append(name)
         print()
 
+    # Ensure user-requested mods are marked as requested=True
+    # even if a prior mod already installed them as dependencies
+    mods_meta = metadata.get("mods", {})
+    for _name, slug, _action in install_map:
+        if slug in mods_meta:
+            mods_meta[slug]["requested"] = True
+
     save_metadata(metadata)
 
     divider(c=MINT)
-    print(f"  {LIME}✔ {ok_count} succeeded{RESET}", end="")
+    parts = []
+    if installed_list:
+        parts.append(f"{LIME}✔ {len(installed_list)} installed{RESET}")
+    if skipped_list:
+        parts.append(f"{CYAN}⊘ {len(skipped_list)} already exist{RESET}")
     if fail_list:
-        print(f"    {ROSE}✗ {len(fail_list)} failed:{RESET} {', '.join(fail_list)}", end="")
-    print(f"\n  {dim('Directory: ' + str(dest_dir))}\n")
+        parts.append(f"{ROSE}✗ {len(fail_list)} failed{RESET}")
+    if parts:
+        print(f"  {'    '.join(parts)}")
+    print(f"  {dim('Directory: ' + str(dest_dir))}\n")
 
     if len(mods) > 1:
         print(f"  {BYELLOW}Installation map:{RESET}")
         max_len = max(len(m) for m in mods)
         for i, req in enumerate(mods, 1):
-            found = next((s for n, s in install_map if n == req), None)
+            found = next(((s, a) for n, s, a in install_map if n == req), None)
             if found:
-                print(f"    {dim(str(i) + '.')}  {req:<{max_len}}  →  {LIME}{found}{RESET}")
+                slug, action = found
+                if action == "installed":
+                    print(f"    {dim(str(i) + '.')}  {req:<{max_len}}  →  {LIME}{slug}{RESET}")
+                elif action == "skipped":
+                    print(f"    {dim(str(i) + '.')}  {req:<{max_len}}  →  {CYAN}{slug}{RESET}  {dim('(already exists)')}")
+                else:
+                    print(f"    {dim(str(i) + '.')}  {req:<{max_len}}  →  {CYAN}{slug}{RESET}  {dim('(already installed)')}")
             else:
                 print(f"    {dim(str(i) + '.')}  {req:<{max_len}}  →  {ROSE}(failed){RESET}")
         print()
@@ -573,3 +615,318 @@ def cmd_autoremove(args):
 
     save_metadata(metadata)
     print(f"  {dim(f'{removed} orphaned dep(s) removed.')}\n")
+
+
+def cmd_update(args):
+    profile = _require_profile()
+    dest_dir = Path.cwd()
+    metadata = load_metadata()
+    metadata["mc_version"] = profile["mc_version"]
+    metadata["loader"] = profile["loader"]
+    mods = metadata.get("mods", {})
+
+    if not mods:
+        err("No mods in metadata.")
+        print()
+        return
+
+    if args.names:
+        raw = " ".join(args.names)
+        names = [s.strip() for s in raw.split(",") if s.strip()]
+        slugs = []
+        for name in names:
+            slug = name if name in mods else None
+            if not slug:
+                slug = next((s for s, m in mods.items()
+                             if m.get("title", "").lower() == name.lower()), None)
+            if not slug:
+                matched = fuzzy_match(name, list(mods.keys()))
+                if matched:
+                    slug = matched
+            if not slug:
+                warn(f"No installed mod found close to '{name}'")
+                continue
+            slugs.append(slug)
+        if not slugs:
+            print()
+            return
+    else:
+        slugs = list(mods.keys())
+
+    if not slugs:
+        warn("No mods to update.")
+        print()
+        return
+
+    action = "Would update" if args.dry_run else "Checking updates for"
+    header(f"{action} {len(slugs)} mod{'s' if len(slugs) != 1 else ''}", str(dest_dir))
+
+    updated = []
+    up_to_date = []
+    failed = []
+    new_deps = []
+
+    for i, slug in enumerate(slugs, 1):
+        entry = mods.get(slug, {})
+        current_vid = entry.get("version_id", "")
+        current_ver = entry.get("version", "?")
+        title = entry.get("title", slug)
+
+        print(f"  {SLATE}[{i}/{len(slugs)}]{RESET}  {BWHITE}{title}{RESET}  "
+              f"{dim('v' + current_ver)}", end="", flush=True)
+
+        try:
+            version = get_best_version(slug, profile)
+            if not version:
+                print(f"  {ROSE}no compatible version{RESET}")
+                failed.append(slug)
+                continue
+
+            latest_vid = version.get("id", "")
+            latest_ver = version.get("version_number", "?")
+
+            if latest_vid == current_vid:
+                print(f"  {GREEN}✓ up-to-date{RESET}")
+                up_to_date.append(slug)
+                continue
+
+            print(f"  {YELLOW}v{current_ver} → v{latest_ver}{RESET}")
+
+            if args.dry_run:
+                continue
+
+            file_info = get_primary_file(version)
+            if not file_info:
+                print(f"       {ROSE}no downloadable file{RESET}")
+                failed.append(slug)
+                continue
+
+            url = file_info["url"]
+            filename = file_info["filename"]
+            sha512 = file_info.get("hashes", {}).get("sha512", "")
+
+            old_file = entry.get("file", "")
+            if old_file and (dest_dir / old_file).exists():
+                (dest_dir / old_file).unlink()
+
+            dest = dest_dir / filename
+
+            def _upd_progress(pct, downloaded, total, speed, elapsed):
+                if total:
+                    filled = pct // 4
+                    bar = f"{MINT}{'█' * filled}{SLATE}{'░' * (25 - filled)}{RESET}"
+                    done = f"{GOLD}{downloaded//1024:,}{RESET}KB"
+                    tot_s = f"{SLATE}/{total//1024:,}KB{RESET}"
+                    spd = f"{CYAN}{speed/1024:5.0f}KB/s{RESET}"
+                    pct_s = f"{BYELLOW}{pct:3d}%{RESET}"
+                    print(f"\r       {bar} {pct_s}  {done}{tot_s}  {spd}  ", end="", flush=True)
+
+            download_file(url, dest, sha512_expected=sha512 or None,
+                          progress_callback=_upd_progress)
+
+            project = get_project(slug) or {}
+            upsert_mod(metadata, slug,
+                title=title,
+                description=entry.get("description", ""),
+                version_id=latest_vid,
+                version=latest_ver,
+                version_type=version.get("version_type", "release"),
+                file=filename,
+                sha512=sha512,
+                size_bytes=file_info.get("size", 0),
+                project_id=project.get("id", entry.get("project_id", "")),
+                source_url=project.get("source_url") or project.get("issues_url") or "",
+                license=(project.get("license") or {}).get("id", ""),
+                categories=project.get("categories", []),
+                downloads=project.get("downloads", 0),
+                followers=project.get("followers", 0),
+                icon_url=project.get("icon_url", ""),
+                gallery=project.get("gallery", []),
+                installed_at=_now_iso(),
+            )
+
+            print(f"\r       {GREEN}✔{RESET}  {dim(filename)}  ")
+
+            # Re-sync deps from the new version
+            deps = get_required_dependencies(slug, profile)
+            for dep_slug, _dep_version_id in deps:
+                if dep_slug in metadata.get("mods", {}):
+                    upsert_mod(metadata, dep_slug, required_by=[slug])
+                else:
+                    new_deps.append(dep_slug)
+                    print(f"       {CYAN}→ new dep:{RESET}  {BWHITE}{dep_slug}{RESET}")
+                    seen = set(slugs + [s for s, _, _ in updated])
+                    try:
+                        install_mod(dep_slug, profile, dest_dir, metadata,
+                                    parent_slug=slug, seen=seen,
+                                    status_callback=_install_status_callback)
+                    except MMMError as e:
+                        print(f"       {ROSE}{e}{RESET}")
+                    print()
+
+            updated.append((slug, current_ver, latest_ver))
+
+        except MMMError as e:
+            print(f"  {ROSE}{e}{RESET}")
+            failed.append(slug)
+
+    save_metadata(metadata)
+
+    if updated or up_to_date or failed or new_deps:
+        print()
+        divider(c=MINT)
+        if updated:
+            print(f"  {LIME}✔ {len(updated)} updated:{RESET}")
+            for slug, old_v, new_v in updated:
+                e = metadata.get("mods", {}).get(slug, {})
+                print(f"       {BWHITE}{e.get('title', slug)}{RESET}  {dim(f'{old_v} → {new_v}')}")
+        if up_to_date:
+            print(f"  {CYAN}✓ {len(up_to_date)} up-to-date{RESET}")
+        if new_deps:
+            print(f"  {TEAL}✦ {len(new_deps)} new dep(s) auto-installed:{RESET}")
+            for ds in new_deps:
+                e = metadata.get("mods", {}).get(ds, {})
+                print(f"       {BWHITE}{e.get('title', ds)}{RESET}  {dim(ds)}")
+        if failed:
+            print(f"  {ROSE}✗ {len(failed)} failed:{RESET} {', '.join(failed)}")
+        print()
+        return
+
+    if args.names:
+        raw = " ".join(args.names)
+        names = [s.strip() for s in raw.split(",") if s.strip()]
+        slugs = []
+        for name in names:
+            slug = name if name in mods else None
+            if not slug:
+                slug = next((s for s, m in mods.items()
+                             if m.get("title", "").lower() == name.lower()), None)
+            if not slug:
+                matched = fuzzy_match(name, list(mods.keys()))
+                if matched:
+                    slug = matched
+            if not slug:
+                warn(f"No installed mod found close to '{name}'")
+                continue
+            slugs.append(slug)
+        if not slugs:
+            print()
+            return
+    elif args.all:
+        slugs = list(mods.keys())
+    else:
+        slugs = [s for s, m in mods.items() if m.get("requested")]
+
+    if not slugs:
+        warn("No mods to update.")
+        print()
+        return
+
+    action = "Would update" if args.dry_run else "Checking updates for"
+    header(f"{action} {len(slugs)} mod{'s' if len(slugs) != 1 else ''}", str(dest_dir))
+
+    updated = []
+    up_to_date = []
+    failed = []
+
+    for i, slug in enumerate(slugs, 1):
+        entry = mods.get(slug, {})
+        current_vid = entry.get("version_id", "")
+        current_ver = entry.get("version", "?")
+        title = entry.get("title", slug)
+
+        print(f"  {SLATE}[{i}/{len(slugs)}]{RESET}  {BWHITE}{title}{RESET}  "
+              f"{dim('v' + current_ver)}", end="", flush=True)
+
+        try:
+            version = get_best_version(slug, profile)
+            if not version:
+                print(f"  {ROSE}no compatible version{RESET}")
+                failed.append(slug)
+                continue
+
+            latest_vid = version.get("id", "")
+            latest_ver = version.get("version_number", "?")
+
+            if latest_vid == current_vid:
+                print(f"  {GREEN}✓ up-to-date{RESET}")
+                up_to_date.append(slug)
+                continue
+
+            print(f"  {YELLOW}v{current_ver} → v{latest_ver}{RESET}")
+
+            if args.dry_run:
+                continue
+
+            file_info = get_primary_file(version)
+            if not file_info:
+                print(f"       {ROSE}no downloadable file{RESET}")
+                failed.append(slug)
+                continue
+
+            url = file_info["url"]
+            filename = file_info["filename"]
+            sha512 = file_info.get("hashes", {}).get("sha512", "")
+
+            old_file = entry.get("file", "")
+            if old_file and (dest_dir / old_file).exists():
+                (dest_dir / old_file).unlink()
+
+            dest = dest_dir / filename
+
+            def _upd_progress(pct, downloaded, total, speed, elapsed):
+                if total:
+                    filled = pct // 4
+                    bar = f"{MINT}{'█' * filled}{SLATE}{'░' * (25 - filled)}{RESET}"
+                    done = f"{GOLD}{downloaded//1024:,}{RESET}KB"
+                    tot_s = f"{SLATE}/{total//1024:,}KB{RESET}"
+                    spd = f"{CYAN}{speed/1024:5.0f}KB/s{RESET}"
+                    pct_s = f"{BYELLOW}{pct:3d}%{RESET}"
+                    print(f"\r       {bar} {pct_s}  {done}{tot_s}  {spd}  ", end="", flush=True)
+
+            download_file(url, dest, sha512_expected=sha512 or None,
+                          progress_callback=_upd_progress)
+
+            project = get_project(slug) or {}
+            upsert_mod(metadata, slug,
+                title=title,
+                description=entry.get("description", ""),
+                version_id=latest_vid,
+                version=latest_ver,
+                version_type=version.get("version_type", "release"),
+                file=filename,
+                sha512=sha512,
+                size_bytes=file_info.get("size", 0),
+                project_id=project.get("id", entry.get("project_id", "")),
+                source_url=project.get("source_url") or project.get("issues_url") or "",
+                license=(project.get("license") or {}).get("id", ""),
+                categories=project.get("categories", []),
+                downloads=project.get("downloads", 0),
+                followers=project.get("followers", 0),
+                icon_url=project.get("icon_url", ""),
+                gallery=project.get("gallery", []),
+                installed_at=_now_iso(),
+            )
+
+            print(f"\r       {GREEN}✔{RESET}  {dim(filename)}  ")
+            updated.append((slug, current_ver, latest_ver))
+
+        except MMMError as e:
+            print(f"  {ROSE}{e}{RESET}")
+            failed.append(slug)
+
+    save_metadata(metadata)
+
+    if updated or up_to_date or failed:
+        print()
+        divider(c=MINT)
+        if updated:
+            print(f"  {LIME}✔ {len(updated)} updated:{RESET}")
+            for slug, old_v, new_v in updated:
+                e = mods.get(slug, {})
+                print(f"       {BWHITE}{e.get('title', slug)}{RESET}  {dim(f'{old_v} → {new_v}')}")
+        if up_to_date:
+            print(f"  {CYAN}✓ {len(up_to_date)} up-to-date{RESET}")
+        if failed:
+            print(f"  {ROSE}✗ {len(failed)} failed:{RESET} {', '.join(failed)}")
+        print()

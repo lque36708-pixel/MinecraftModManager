@@ -17,6 +17,7 @@ from mmmcore.cli.display import (
 from mmmcore.cli.commands import (
     cmd_set_profile, cmd_search, cmd_get, cmd_show,
     cmd_list, cmd_remove, cmd_profile, cmd_autoremove,
+    cmd_update,
 )
 
 def print_help():
@@ -83,6 +84,14 @@ def print_help():
             f"{BYELLOW}autoremove{RESET}",
             "Remove orphaned dependencies no longer required by any mod.",
             [f"{GOLD}mmm autoremove{RESET}"]
+        ),
+        (
+            f"{BYELLOW}update{RESET}  {SLATE}|{RESET}  {BYELLOW}update{RESET} {CYAN}<name>{RESET}  {SLATE}|{RESET}  {BYELLOW}update -a{RESET}",
+            "Update installed mods to latest versions. Default: update requested mods.",
+            [f"{GOLD}mmm update{RESET}",
+             f"{GOLD}mmm update sodium, lithium{RESET}",
+             f"{GOLD}mmm update -a{RESET}",
+             f"{GOLD}mmm update --dry-run{RESET}"]
         ),
     ]
 
@@ -180,6 +189,12 @@ def build_parser():
     # autoremove
     sub.add_parser("autoremove")
 
+    # update
+    p = sub.add_parser("update")
+    p.add_argument("names", nargs="*")
+    p.add_argument("-a", "--all", action="store_true")
+    p.add_argument("-n", "--dry-run", action="store_true")
+
     return parser
 
 
@@ -195,6 +210,7 @@ COMMAND_DISPATCH = {
     "rm":          cmd_remove,
     "profile":     cmd_profile,
     "autoremove":  cmd_autoremove,
+    "update":      cmd_update,
 }
 
 

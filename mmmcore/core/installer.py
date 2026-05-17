@@ -18,8 +18,8 @@ def install_mod(name, profile, dest_dir, metadata, parent_slug=None, seen=None, 
 
     if slug in seen:
         if status_callback:
-            status_callback("already_seen", {"slug": slug})
-        return slug
+            status_callback("already_seen", {"slug": slug, "parent_slug": parent_slug})
+        return slug, "already_seen"
     seen.add(slug)
 
     is_dep = parent_slug is not None
@@ -53,10 +53,16 @@ def install_mod(name, profile, dest_dir, metadata, parent_slug=None, seen=None, 
     project = get_project(slug) or {}
 
     if dest.exists():
+        entry = metadata.get("mods", {}).get(slug, {})
+        is_dep_entry = not entry.get("requested", True) if entry else is_dep
         if status_callback:
             status_callback("skip_exists", {
                 "slug": slug, "filename": filename,
+                "is_dependency": is_dep_entry,
+                "required_by": entry.get("required_by", []),
+                "title": project.get("title") or (hit.get("title", slug) if hit else slug),
             })
+        action = "skipped"
     else:
         if status_callback:
             status_callback("downloading", {
@@ -73,6 +79,7 @@ def install_mod(name, profile, dest_dir, metadata, parent_slug=None, seen=None, 
             status_callback("download_done", {
                 "slug": slug, "filename": filename, "title": title,
             })
+        action = "installed"
 
     upsert_mod(metadata, slug,
         title        = project.get("title") or (hit.get("title", slug) if hit else slug),
@@ -109,7 +116,7 @@ def install_mod(name, profile, dest_dir, metadata, parent_slug=None, seen=None, 
         install_mod(dep_slug, profile, dest_dir, metadata,
                     parent_slug=slug, seen=seen, status_callback=status_callback)
 
-    return slug
+    return slug, action
 
 
 def _make_progress_callback(slug, outer_cb):

@@ -50,23 +50,14 @@ source ~/.zshrc
 ### Windows (PowerShell / CMD)
 
 1. Install Python 3.8+ from [python.org](https://python.org) — ensure **Add to PATH** is checked.
-2. Clone the repository:
+2. Clone and run install:
    ```powershell
    git clone https://github.com/lque36708-pixel/MinecraftModManager.git
    cd MinecraftModManager
-   ```
-3. Install the dependency:
-   ```powershell
    pip install rich
-   ```
-4. Install `mmm` (adds repo to your PATH):
-   ```powershell
    .\install.ps1
    ```
-   Restart your terminal, then use `mmm` from any directory:
-   ```powershell
-   mmm --help
-   ```
+   Restart your terminal, then try `mmm --help` from any directory.
 
 ### Verify Installation
 
